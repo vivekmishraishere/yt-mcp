@@ -43,6 +43,7 @@ export async function saveFile(data: Buffer, stem: string, tag: string, ext: str
         const name = `${crypto.randomBytes(12).toString('hex')}__${base}${ext}`;
         const file = path.join(config.storageDir, name);
         await writeNew(file, data);
+        sweepSoon();
         const url = `${baseUrl()}/files/${name}`;
         return { path: file, name, ref: url, url };
     }
@@ -81,24 +82,40 @@ export async function listStored(limit = 50): Promise<{ name: string; ref: strin
         .map(x => ({ name: x.n, ref: `${baseUrl()}/files/${x.n}`, size: x.s!.size, modified: x.s!.mtime }));
 }
 
-/** Delete expired files (HTTP mode only). Returns how many were removed. */
+/**
+ * Delete expired files, then the oldest files while the folder is over MAX_STORAGE_MB (HTTP mode only).
+ * Returns how many files were removed.
+ */
 export async function cleanupExpired(now = Date.now()): Promise<number> {
     const ttlMs = config.fileTtlHours * 3600_000;
-    let removed = 0;
+    const capBytes = config.maxStorageMb > 0 ? config.maxStorageMb * 1024 * 1024 : Infinity;
     let names: string[] = [];
     try {
-        names = await fs.readdir(config.storageDir);
+        names = (await fs.readdir(config.storageDir)).filter(n => STORED_NAME.test(n));
     } catch {
         return 0;
     }
-    for (const n of names) {
-        if (!STORED_NAME.test(n)) continue;
+    const files = (await Promise.all(names.map(async n => {
         const f = path.join(config.storageDir, n);
         const st = await fs.stat(f).catch(() => null);
-        if (st && now - st.mtimeMs > ttlMs) {
-            await fs.rm(f, { force: true });
-            removed++;
-        }
+        return st?.isFile() ? { f, size: st.size, mtime: st.mtimeMs } : null;
+    }))).filter((x): x is { f: string; size: number; mtime: number } => !!x).sort((a, b) => a.mtime - b.mtime);
+    let total = files.reduce((t, x) => t + x.size, 0);
+    let removed = 0;
+    for (const x of files) {
+        if (now - x.mtime <= ttlMs && total <= capBytes) continue;
+        await fs.rm(x.f, { force: true });
+        total -= x.size;
+        removed++;
     }
     return removed;
+}
+
+let lastSweep = 0;
+let sweeping: Promise<unknown> | null = null;
+/** Cheap trigger after each save: runs a cleanup at most once every 20 s, so the disk cap holds between periodic sweeps. */
+export function sweepSoon(): void {
+    if (config.mode !== 'http' || sweeping || Date.now() - lastSweep < 20_000) return;
+    lastSweep = Date.now();
+    sweeping = cleanupExpired().catch(() => 0).finally(() => { sweeping = null; });
 }

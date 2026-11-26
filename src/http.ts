@@ -1,6 +1,6 @@
 /**
  * Remote mode: Express app with
- *   POST/GET/DELETE /mcp   MCP Streamable HTTP endpoint (bearer-token protected)
+ *   POST/GET/DELETE /mcp   MCP Streamable HTTP endpoint (bearer token, or open to anyone with OPEN_ACCESS=1)
  *   GET  /files/:name      download / view a result (unguessable names, expire after FILE_TTL_HOURS)
  *   GET  /upload?t=...     upload page (signed, expiring link from the create_upload_link tool)
  *   POST /upload?t=...     raw image upload -> returns an image link usable by every tool
@@ -92,9 +92,14 @@ document.getElementById('copy').onclick=async()=>{const l=document.getElementByI
 </script></body></html>`;
 
 export async function startHttp(): Promise<void> {
-    if (!config.authToken && !config.allowNoAuth) {
-        console.error('[yt-mcp] Refusing to start: set MCP_AUTH_TOKEN (a long random secret). For local testing only, ALLOW_NO_AUTH=1 disables auth.');
+    if (!config.authToken && !config.openAccess) {
+        console.error('[yt-mcp] Refusing to start: set MCP_AUTH_TOKEN (a long random secret) for a private server, ' +
+            'or OPEN_ACCESS=1 for a public server that anyone with the URL can use.');
         process.exit(1);
+    }
+    if (config.openAccess) {
+        console.error(`[yt-mcp] OPEN_ACCESS: public server, no token needed. Limits: ${config.rateLimitPerMinute} MCP requests/min, ` +
+            `${config.maxConcurrentJobs} jobs at a time, ${config.maxStorageMb} MB storage, files kept ${config.fileTtlHours} h.`);
     }
     await fs.mkdir(config.storageDir, { recursive: true });
 
@@ -112,7 +117,12 @@ export async function startHttp(): Promise<void> {
     });
 
     app.get('/', (_req, res) => {
-        res.json({ name: 'yt-mcp', version: config.version, mcp_endpoint: '/mcp', docs: 'Connect an MCP client to /mcp with Authorization: Bearer <token>.' });
+        res.json({
+            name: 'yt-mcp', version: config.version, mcp_endpoint: '/mcp', access: config.openAccess ? 'public' : 'token',
+            docs: config.openAccess
+                ? 'Public MCP server with 29 image tools. Add this URL + /mcp as a custom connector in Claude (no token needed).'
+                : 'Connect an MCP client to /mcp with Authorization: Bearer <token>.',
+        });
     });
     app.get('/health', (_req, res) => { res.json({ ok: true, version: config.version, uptime_s: Math.round(process.uptime()) }); });
 
@@ -124,6 +134,7 @@ export async function startHttp(): Promise<void> {
     // while failed logins are limited per IP (brute-force protection).
     const authFailures = makeLimiter(20);
     const mcpBudget = makeLimiter(config.rateLimitPerMinute);
+    const perIp = config.rateLimitPerIp > 0 ? makeLimiter(config.rateLimitPerIp) : null;
     app.all('/mcp', (req, res, next) => {
         if (!isAuthorized(req.headers, req.query as Record<string, unknown>)) {
             // only failures are counted, so a valid token is never locked out by someone else's bad attempts
@@ -134,6 +145,8 @@ export async function startHttp(): Promise<void> {
             res.setHeader('WWW-Authenticate', 'Bearer realm="yt-mcp"');
             return res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized: send Authorization: Bearer <MCP_AUTH_TOKEN>' }, id: null });
         }
+        const ipWait = perIp?.hit(req.ip ?? 'unknown') ?? 0;
+        if (ipWait) return tooMany(res, ipWait);
         const over = mcpBudget.hit('all');
         if (over) return tooMany(res, over);
         next();
@@ -167,7 +180,7 @@ export async function startHttp(): Promise<void> {
         res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' blob: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'");
         res.type('html').send(UPLOAD_PAGE(config.maxInputMb));
     });
-    const uploads = makeLimiter(60);
+    const uploads = makeLimiter(config.uploadsPerMinute);
     app.post('/upload', (req, res, next) => {
         if (!uploadAllowed(req)) return res.status(403).json({ error: 'Upload link invalid or expired.' });
         const over = uploads.hit('all');
@@ -197,7 +210,7 @@ export async function startHttp(): Promise<void> {
     // ---- periodic cleanup of expired files
     const sweep = async () => { const n = await cleanupExpired().catch(() => 0); if (n) console.error(`[yt-mcp] cleaned up ${n} expired files`); };
     void sweep();
-    setInterval(sweep, 30 * 60_000).unref();
+    setInterval(sweep, 5 * 60_000).unref();
 
     const listener = app.listen(config.port, config.host, () => {
         console.error(`[yt-mcp] ${config.version} listening on http://${config.host}:${config.port}  (MCP endpoint: /mcp)` +

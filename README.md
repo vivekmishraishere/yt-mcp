@@ -9,7 +9,7 @@ It runs two ways from the same code:
 
 | Mode | Command | Use it for |
 |---|---|---|
-| **Remote** (Streamable HTTP at **`/mcp`**) | `node dist/server.js` | Hostinger, any VPS or Docker host; claude.ai, Claude Desktop/mobile custom connectors, Claude Code |
+| **Remote** (Streamable HTTP at **`/mcp`**) | `node dist/server.js` | Hostinger, any VPS or Docker host; claude.ai, Claude Desktop/mobile custom connectors, Claude Code. Public (`OPEN_ACCESS=1`, no login) or private (token) |
 | **Local** (stdio) | `node dist/server.js --stdio` | Claude Desktop config, Claude Code, Cursor on your own computer |
 
 Originals are never modified: every result is a **new** file (never overwritten), returned with an inline preview.
@@ -22,7 +22,7 @@ R = read-only. W = writes a new result file.
 | # | Tool | R/W | What it does | Typical use |
 |---|---|---|---|---|
 | 1 | `get_image_info` | R | Size, megapixels, ratio, format, file size, transparency, EXIF, GPS check | "Does this photo reveal my location?" |
-| 2 | `list_images` | R | Local: images in a folder. Remote: your recent uploads/results | "Use my latest screenshot" |
+| 2 | `list_images` | R | Local: images in a folder. Remote with a token: recent uploads/results. Public server: disabled, for privacy | "Use my latest screenshot" |
 | 3 | `extract_color_palette` | R | Dominant colors as hex + %, with swatch | Brand / ring colors |
 | 4 | `detect_faces` | R | Numbered face boxes + focus points + preview | Blur one person; frame a profile photo |
 | 5 | `crop_image` | W | Crop by aspect ratio (focus/zoom) or exact box | Square post, 16:9 frame |
@@ -70,7 +70,7 @@ HEIC decoding and face detection run in WebAssembly, and text uses a bundled fon
 ```bash
 npm install
 npm run build
-npm test          # builds, then runs 70 unit + end-to-end tests (HTTP and stdio)
+npm test          # builds, then runs 74 unit + end-to-end tests (private HTTP, public HTTP and stdio)
 ```
 
 ## Deploy on Hostinger (Business or Cloud web hosting, Node.js app)
@@ -83,20 +83,42 @@ Hostinger's web hosting runs Node.js apps (Python needs a VPS), which is why thi
    - Node version: **22.x** (20.x also works)
    - Build command: **`npm run build`**
    - Entry file: **`dist/server.js`**
-3. **Environment variables** (Hostinger asks for these during deployment):
-   - `MCP_AUTH_TOKEN`: a long random secret. Generate one with `openssl rand -hex 32` and keep it private.
-   - `PUBLIC_BASE_URL`: your app's address, e.g. `https://mcp.yourdomain.com` (no trailing slash).
-   - Optional: anything from [`.env.example`](.env.example). `PORT` is set by Hostinger automatically.
-4. Deploy, then check `https://mcp.yourdomain.com/health` returns `{"ok":true,...}`.
-5. Test the MCP endpoint (replace the URL and token):
+3. **Environment variables** (Hostinger asks for these during deployment). Choose one access mode:
+
+   | | Public server (anyone with the URL) | Private server (token) |
+   |---|---|---|
+   | Set | `OPEN_ACCESS=1` | `MCP_AUTH_TOKEN=<openssl rand -hex 32>` |
+   | Connect with | `https://mcp.yourdomain.com/mcp` | the URL plus the token (see below) |
+
+   Always also set `PUBLIC_BASE_URL` to your app's address, e.g. `https://mcp.yourdomain.com` (no trailing slash).
+   Optional: anything from [`.env.example`](.env.example). `PORT` is set by Hostinger automatically.
+4. Deploy, then check `https://mcp.yourdomain.com/health` returns `{"ok":true,...}` and `https://mcp.yourdomain.com/`
+   shows `"access":"public"` (or `"token"`).
+5. Test the MCP endpoint (drop the `--header` part for a public server):
 
    ```bash
    npx @modelcontextprotocol/inspector --cli https://mcp.yourdomain.com/mcp --transport http --header "Authorization: Bearer YOUR_TOKEN" --method tools/list
    ```
 
-   You should see 29 tools. Without the header you must get `401`.
+   You should see 29 tools. On a private server, a request without the header must get `401`.
 
-If the server refuses to start, check the logs in hPanel: it exits on purpose when `MCP_AUTH_TOKEN` is missing.
+If the server refuses to start, check the logs in hPanel: it exits on purpose when neither `OPEN_ACCESS=1` nor
+`MCP_AUTH_TOKEN` is set, so it is never public by accident.
+
+### Running it as a public server
+
+With `OPEN_ACCESS=1` anyone who knows the URL can use the tools. What protects you and your users:
+
+- The server never reads its own files: local paths are refused, and URL fetching blocks private/loopback addresses.
+- Every upload and result has an unguessable link (96-bit random), so users cannot see each other's images, and
+  `list_images` is disabled. Uploads still need a signed, expiring link from `create_upload_link`, so the server cannot be
+  used as anonymous file hosting.
+- Limits keep a shared host responsive: `RATE_LIMIT_PER_MINUTE` (600 requests/min for everyone), `MAX_CONCURRENT_JOBS`
+  (2 images at a time, others wait up to 60 s), `UPLOADS_PER_MINUTE` (60), `MAX_INPUT_MB` (25), `MAX_PIXELS` (60 MP).
+- Disk use is capped by `MAX_STORAGE_MB` (1 GB): files are deleted after `FILE_TTL_HOURS` (24 h), and the oldest go first
+  when the cap is reached, so your hosting quota cannot fill up.
+- What it cannot stop: someone using up the shared request budget. If that happens, set `MCP_AUTH_TOKEN` to make it
+  private again (restart applies it), or put Cloudflare in front for per-visitor limits.
 
 ### VPS / Docker instead
 
@@ -115,7 +137,11 @@ Put it behind HTTPS (Caddy, Nginx + Let's Encrypt, or Cloudflare Tunnel).
 claude mcp add --transport http yt-mcp https://mcp.yourdomain.com/mcp --header "Authorization: Bearer YOUR_TOKEN"
 ```
 
-**claude.ai / Claude Desktop / Claude mobile (custom connector):** Customize → Connectors → Add custom connector →
+**Public server:** in Claude Code `claude mcp add --transport http yt-mcp https://mcp.yourdomain.com/mcp`; in
+claude.ai / Claude Desktop / Claude mobile: Customize → Connectors → Add custom connector → URL
+`https://mcp.yourdomain.com/mcp`. Share that URL with anyone.
+
+**claude.ai / Claude Desktop / Claude mobile, private server (custom connector):** Customize → Connectors → Add custom connector →
 URL `https://mcp.yourdomain.com/mcp?key=YOUR_TOKEN`. The connector form takes a URL only, so the token rides in the
 URL (`ALLOW_QUERY_TOKEN=1`, the default). Treat that URL like a password; rotate `MCP_AUTH_TOKEN` if it leaks.
 (OAuth is not implemented in this version.)
@@ -137,13 +163,15 @@ Local results go to `~/ImageMCP/output`; local mode can read files under your ho
 
 ## Security
 
-- Every `/mcp` request needs the bearer token (constant-time compare). Wrong tokens are rate-limited per IP (20/min);
-  valid traffic has a global budget (`RATE_LIMIT_PER_MINUTE`, default 600).
+- Private mode: every `/mcp` request needs the bearer token (constant-time compare). Wrong tokens are rate-limited per IP
+  (20/min). Public mode (`OPEN_ACCESS=1`): no token; see "Running it as a public server". Both share a global budget
+  (`RATE_LIMIT_PER_MINUTE`, default 600) and an optional per-IP limit (`RATE_LIMIT_PER_IP`).
 - Host-header validation (DNS-rebinding protection) uses `PUBLIC_BASE_URL` / `ALLOWED_HOSTS`.
 - Remote mode never reads server files: local paths are rejected; URL fetching blocks private/loopback addresses
   (SSRF protection, re-checked on every redirect), with size and time limits.
 - Uploads need a signed, expiring link (HMAC) or the bearer token, and must decode as a real image.
-- Result files have unguessable names (96-bit random) and are deleted after `FILE_TTL_HOURS`.
+- Result files have unguessable names (96-bit random), are deleted after `FILE_TTL_HOURS`, and the folder is capped at
+  `MAX_STORAGE_MB` (oldest deleted first).
 - Limits on input size, megapixels, output size and concurrent jobs keep a small host responsive.
 
 ## Limits

@@ -17,7 +17,8 @@ const INSTRUCTIONS = config.mode === 'http'
 This server cannot read the user's computer, and images attached in chat cannot be passed to tools: call create_upload_link and
 give the user the page; they upload and paste back the image link. Every result is a NEW file: the reply has \`output\` (pass it to
 the next tool), \`download_url\` (give it to the user) and an inline preview. Files expire after ${config.fileTtlHours} hours.
-For 2+ edits on one image prefer run_image_pipeline (one save, no quality loss).`
+For 2+ edits on one image prefer run_image_pipeline (one save, no quality loss).${config.openAccess ? `
+This is a public server shared by many people: links are private to whoever holds them, and list_images is not available.` : ''}`
     : `Local image editing tools. Inputs: an absolute file path, an http(s) URL, or base64.
 Originals are never modified: every edit is saved as a NEW file in ${config.storageDir} and the reply includes its output_path
 (pass it to the next tool) plus an inline preview. For 2+ edits on one image prefer run_image_pipeline (one save, no quality loss).
@@ -41,7 +42,7 @@ export function createServer(): McpServer {
         async uri => json(uri.href, RING_STYLES));
     server.registerResource('server_config', 'image-mcp://config', { description: 'Mode, limits and supported formats of this server.', mimeType: 'application/json' },
         async uri => json(uri.href, {
-            mode: config.mode, max_input_mb: config.maxInputMb, max_megapixels: config.maxPixels / 1e6, urls_allowed: config.allowUrls,
+            mode: config.mode, public_open_access: config.mode === 'http' ? config.openAccess : false, max_input_mb: config.maxInputMb, max_megapixels: config.maxPixels / 1e6, urls_allowed: config.allowUrls,
             local_paths_allowed: config.allowLocalPaths, file_ttl_hours: config.mode === 'http' ? config.fileTtlHours : null,
             input_formats: INPUT_FORMATS, output_formats: FORMAT_KEYS,
         }));

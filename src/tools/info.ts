@@ -40,9 +40,12 @@ export function register(server: McpServer): void {
     });
 
     registerTool(server, 'list_images', {
-        title: config.mode === 'http' ? 'List recent images on the server' : 'List images in a folder',
+        title: config.mode === 'http' ? (config.openAccess ? 'List images (not available on a public server)' : 'List recent images on the server') : 'List images in a folder',
         readOnly: true,
-        description: config.mode === 'http'
+        description: config.mode === 'http' && config.openAccess
+            ? 'On this public server, stored images are private to whoever has their link, so they cannot be listed. Use the ' +
+              '`output` link from an earlier tool result, or call create_upload_link to get an image in.'
+            : config.mode === 'http'
             ? 'Lists the most recent images stored on this server (your uploads and every tool result), newest first, with links ' +
               'you can pass to any other tool. Files expire after ' + config.fileTtlHours + ' hours.'
             : "Lists image files (JPG, PNG, HEIC, WebP, AVIF, GIF, TIFF, BMP) in a folder with size and date, newest first by default. " +
@@ -55,6 +58,10 @@ export function register(server: McpServer): void {
             recursive: z.boolean().default(false).describe('Also look inside sub-folders (local only).'),
         }),
     }, async ({ folder, sort, limit, offset, recursive }) => {
+        if (config.mode === 'http' && config.openAccess) {
+            throw new OpError('This is a public server, so stored images are not listed (they are private to whoever has the link). ' +
+                'Use the `output` link from an earlier result, or call create_upload_link and ask the user to upload the image.');
+        }
         if (config.mode === 'http') {
             const items = await listStored(offset + limit);
             return reply({ total_shown: items.slice(offset).length, images: items.slice(offset).map(i => ({ image: i.ref, file_size: humanSize(i.size), modified: i.modified.toISOString() })) });

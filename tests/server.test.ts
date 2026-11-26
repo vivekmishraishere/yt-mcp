@@ -130,6 +130,65 @@ describe('remote (Streamable HTTP at /mcp)', () => {
     });
 });
 
+describe('public server (OPEN_ACCESS=1, no token)', () => {
+    const OPEN_PORT = PORT + 1;
+    const OPEN = `http://127.0.0.1:${OPEN_PORT}`;
+    const DIR = path.join(WORK, 'open-files');
+    let open: ChildProcess;
+    let anon: Client;
+    beforeAll(async () => {
+        // 3 MB of old files in a 2 MB cap: the startup sweep must delete the oldest until it fits.
+        fs.mkdirSync(DIR, { recursive: true });
+        for (let i = 0; i < 3; i++) {
+            const f = path.join(DIR, `${String(i).repeat(24)}__old${i}.png`);
+            fs.writeFileSync(f, Buffer.alloc(1024 * 1024));
+            const t = new Date(Date.now() - (10 - i) * 60_000);
+            fs.utimesSync(f, t, t);
+        }
+        const env = { ...process.env, PORT: String(OPEN_PORT), OPEN_ACCESS: '1', PUBLIC_BASE_URL: OPEN, STORAGE_DIR: DIR, HOST: '127.0.0.1', MAX_STORAGE_MB: '2' };
+        delete env.MCP_AUTH_TOKEN;
+        open = spawn(process.execPath, [ENTRY], { env, stdio: ['ignore', 'ignore', 'pipe'] });
+        for (let i = 0; i < 100; i++) {
+            try { if ((await fetch(`${OPEN}/health`)).ok) break; } catch { /* not up yet */ }
+            await new Promise(r => setTimeout(r, 100));
+        }
+        anon = new Client({ name: 'anon', version: '1.0.0' });
+        await anon.connect(new StreamableHTTPClientTransport(new URL(`${OPEN}/mcp`)));
+    }, 30_000);
+    afterAll(async () => {
+        await anon?.close().catch(() => {});
+        open?.kill();
+    });
+
+    it('works with no token and says it is public', async () => {
+        const { tools } = await anon.listTools();
+        expect(tools.length).toBe(29);
+        expect((await (await fetch(OPEN)).json()).access).toBe('public');
+    });
+
+    it('never lists other people\'s files', async () => {
+        const r = await anon.callTool({ name: 'list_images', arguments: {} });
+        expect(r.isError).toBe(true);
+        expect(text(r)).toMatch(/public server/);
+    });
+
+    it('upload link -> edit -> download, with no token', async () => {
+        const link = data(await anon.callTool({ name: 'create_upload_link', arguments: {} }));
+        const t = new URL(link.upload_page).searchParams.get('t')!;
+        const up = await (await fetch(`${OPEN}/upload?t=${encodeURIComponent(t)}&name=a.jpg`, { method: 'POST', body: fs.readFileSync(FIX('astronaut.jpg')) })).json();
+        const out = data(await anon.callTool({ name: 'apply_filter', arguments: { image: up.image, filter: 'grayscale' } }));
+        expect((await fetch(out.download_url)).status).toBe(200);
+        // a raw upload without a signed link is still refused (no anonymous file hosting)
+        expect((await fetch(`${OPEN}/upload`, { method: 'POST', body: fs.readFileSync(FIX('astronaut.jpg')) })).status).toBe(403);
+    });
+
+    it('keeps storage under MAX_STORAGE_MB by deleting the oldest files', () => {
+        const left = fs.readdirSync(DIR).filter(n => n.includes('__old'));
+        expect(left).not.toContain(`${'0'.repeat(24)}__old0.png`);
+        expect(left).toContain(`${'2'.repeat(24)}__old2.png`);
+    });
+});
+
 describe('local (stdio)', () => {
     let local: Client;
     beforeAll(async () => {

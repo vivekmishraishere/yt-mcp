@@ -46,13 +46,22 @@ export const config = {
     allowedHosts: (env.ALLOWED_HOSTS ?? '').split(',').map(s => s.trim()).filter(Boolean),
     /** Shared secret clients must send as `Authorization: Bearer <token>` (or ?key=<token>). Required in HTTP mode. */
     authToken: env.MCP_AUTH_TOKEN ?? '',
-    allowNoAuth: flag('ALLOW_NO_AUTH', false),
+    /** Public server: anyone with the URL can use it (no token). Ignored when MCP_AUTH_TOKEN is set. ALLOW_NO_AUTH is the old name. */
+    openAccess: !env.MCP_AUTH_TOKEN && (flag('OPEN_ACCESS', false) || flag('ALLOW_NO_AUTH', false)),
+    /** Optional secret for signing upload links, so they survive restarts in open mode (defaults to the auth token). */
+    uploadSecret: env.UPLOAD_SECRET ?? '',
     /** Accept the token as ?key=... in the URL, for clients that can only take a URL (e.g. claude.ai custom connectors). */
     allowQueryToken: flag('ALLOW_QUERY_TOKEN', true),
     /** Max authorised MCP requests per minute for the whole server (one tool call = 1-3 requests). */
     rateLimitPerMinute: num('RATE_LIMIT_PER_MINUTE', 600),
+    /** Optional per-IP limit (0 = off). Off by default: claude.ai sends every user's traffic from a few shared IPs. */
+    rateLimitPerIp: num('RATE_LIMIT_PER_IP', 0),
+    /** Max uploads per minute for the whole server. */
+    uploadsPerMinute: num('UPLOADS_PER_MINUTE', 60),
     maxConcurrentJobs: num('MAX_CONCURRENT_JOBS', 2),
     fileTtlHours: num('FILE_TTL_HOURS', 24),
+    /** Disk cap for uploads + results; the oldest files are deleted first when it is exceeded (protects hosting quotas). */
+    maxStorageMb: num('MAX_STORAGE_MB', 1024),
 
     // ---- storage ----
     storageDir: expand(env.STORAGE_DIR ?? (MODE === 'stdio' ? '~/ImageMCP/output' : path.join(os.tmpdir(), 'yt-mcp-files'))),
