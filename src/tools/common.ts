@@ -91,6 +91,44 @@ const USE_FOR: Record<string, string> = {
 
 // ------------------------------------------------------------------ registration
 
+/** Base type of a zod field, looking through optional/default/nullable wrappers. */
+function baseType(field: any): string {
+    let f = field;
+    for (let i = 0; i < 5 && f?._zod?.def; i++) {
+        const d = f._zod.def;
+        if (['optional', 'default', 'nullable', 'prefault', 'readonly'].includes(d.type) && d.innerType) f = d.innerType;
+        else return d.type;
+    }
+    return 'unknown';
+}
+
+/**
+ * Models and older clients sometimes send typed values as text: "true", "8", or a JSON array as a string. Convert those
+ * before validation, so a call does not fail on formatting alone. Only clear-cut cases are converted.
+ */
+function coerceArgs(shape: Record<string, unknown>, args: unknown): unknown {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+    const out: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(out)) {
+        if (typeof v !== 'string' || !(k in shape)) continue;
+        const t = baseType(shape[k]);
+        const s = v.trim();
+        if (t === 'boolean' && /^(true|false)$/i.test(s)) out[k] = s.toLowerCase() === 'true';
+        else if (t === 'number' && s !== '' && Number.isFinite(Number(s))) out[k] = Number(s);
+        else if ((t === 'array' && s.startsWith('[')) || (t === 'object' && s.startsWith('{'))) {
+            try { out[k] = JSON.parse(s); } catch { /* leave it, validation reports the problem */ }
+        }
+    }
+    return out;
+}
+
+/** The zod schema with lenient input coercion; JSON Schema advertised to clients is unchanged. */
+function lenient<S extends z.ZodObject>(schema: S): S {
+    const std = schema['~standard'];
+    const shape = schema.shape as Record<string, unknown>;
+    return { '~standard': { ...std, validate: (v: unknown) => std.validate(coerceArgs(shape, v)) } } as unknown as S;
+}
+
 export interface ToolDef<S extends z.ZodObject> {
     title: string;
     description: string;
@@ -121,7 +159,7 @@ export function registerTool<S extends z.ZodObject>(server: McpServer, name: str
     server.registerTool(name, {
         title: def.title,
         description: USE_FOR[name] && !(name === 'list_images' && config.mode === 'http') ? `${def.description} Use for: ${USE_FOR[name]}` : def.description,
-        inputSchema: def.input,
+        inputSchema: lenient(def.input),
         annotations: {
             title: def.title,
             readOnlyHint: !!def.readOnly,

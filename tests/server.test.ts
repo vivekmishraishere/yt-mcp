@@ -148,6 +148,22 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(bl.regions_blurred).toBe(1);
     }, 30_000);
 
+    it('accepts typed values sent as text ("true", "8", JSON strings) and still advertises real types', async () => {
+        const b64 = fs.readFileSync(FIX('astronaut.jpg')).toString('base64');
+        const info = await client.callTool({ name: 'get_image_info', arguments: { image: b64, grid: 'true' as any } });
+        expect(info.isError).toBeFalsy();
+        expect(data(info).grid).toBeTruthy();
+        const bl = await client.callTool({ name: 'blur_image', arguments: { image: b64, radius: '8' as any, regions: '[{"x":10,"y":10,"width":50,"height":50}]' as any } });
+        expect(bl.isError).toBeFalsy();
+        expect(data(bl).regions_blurred).toBe(1);
+        const bad = await client.callTool({ name: 'blur_image', arguments: { image: b64, radius: 'strong' as any } });
+        expect(bad.isError).toBe(true);
+        const { tools } = await client.listTools();
+        const schema = tools.find(t => t.name === 'get_image_info')!.inputSchema as any;
+        expect(schema.properties.grid.type).toBe('boolean');
+        expect(schema.required).toEqual(['image']);
+    });
+
     it('returns clean errors, never crashes', async () => {
         const cases: [string, Record<string, unknown>, RegExp][] = [
             ['get_image_info', { image: '/etc/passwd' }, /file name or path.*create_upload_link/],
