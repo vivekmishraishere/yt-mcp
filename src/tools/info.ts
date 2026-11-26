@@ -6,7 +6,7 @@ import { config } from '../config.js';
 import { OpError, hasAlpha } from '../core/img.js';
 import { IMAGE_EXTENSIONS, humanSize, loadImage, reply, resolveLocalPath } from '../core/io.js';
 import { detectFaces } from '../core/ops/faces.js';
-import { drawBoxes, palette, paletteSwatch } from '../core/ops/overlay.js';
+import { drawBoxes, drawGrid, palette, paletteSwatch } from '../core/ops/overlay.js';
 import { listStored } from '../core/storage.js';
 import { imageSource, registerTool, z } from './common.js';
 
@@ -21,10 +21,15 @@ export function register(server: McpServer): void {
         title: 'Get image info',
         readOnly: true,
         description: "Reads an image's details without changing it: width, height, megapixels, aspect ratio, format, file size, " +
-            'transparency, DPI, camera EXIF (make, model, date) and whether it contains GPS location. Use it before cropping ' +
-            '(to know the size) or before sharing (to check for location data).',
-        input: z.object({ image: imageSource() }),
-    }, async ({ image }) => {
+            'transparency, DPI, camera EXIF (make, model, date) and whether it contains GPS location, plus a preview so you can see ' +
+            'the image. With grid=true the preview has a labelled pixel grid (red = x, blue = y, every 10%): use it to read off ' +
+            'exact coordinates for crop_image boxes or blur_image regions, e.g. on drawings where face detection does not work.',
+        input: z.object({
+            image: imageSource(),
+            preview: z.boolean().default(true).describe('Attach a preview image (default true).'),
+            grid: z.boolean().default(false).describe('Draw a labelled pixel-coordinate grid on the preview, to pick exact regions.'),
+        }),
+    }, async ({ image, preview, grid }) => {
         const l = await loadImage(image);
         const { width: w, height: h } = l.img;
         const info: Record<string, unknown> = {
@@ -36,7 +41,8 @@ export function register(server: McpServer): void {
             exif: l.exif && Object.keys(l.exif.fields).length ? l.exif.fields : null,
         };
         if (l.exif?.hasGps) info.privacy_note = 'This photo contains GPS location. Use strip_image_metadata before sharing.';
-        return reply(info);
+        if (grid) info.grid = `Lines every 10%: red labels = x in pixels, blue labels = y in pixels, of the full ${w}x${h} image.`;
+        return reply(info, preview || grid ? (grid ? await drawGrid(l.img) : l.img) : null);
     });
 
     registerTool(server, 'list_images', {
@@ -99,7 +105,8 @@ export function register(server: McpServer): void {
         readOnly: true,
         description: "Finds faces in a photo and returns each one's box (x, y, width, height), numbered biggest first, plus a preview " +
             'with numbered boxes drawn on it. Does not save a file. Use the boxes with blur_image(regions=[...]) to blur only some faces, ' +
-            'with crop_image to crop a face, or focus_x/focus_y for profile pictures. Classic detector: real photos only, not cartoons.',
+            'with crop_image to crop a face, or focus_x/focus_y for profile pictures. Classic detector: works on real photos; for drawings ' +
+            'and cartoons it returns a grid preview so you can give blur_image the regions by hand.',
         input: z.object({
             image: imageSource(),
             sensitivity: z.enum(['strict', 'balanced', 'loose']).default('balanced').describe('strict = fewer false hits, loose = finds more small or angled faces.'),
@@ -111,7 +118,10 @@ export function register(server: McpServer): void {
         const out = faces.map(f => ({ ...f, focus_x: Math.round(((f.x + f.width / 2) / W) * 1000) / 1000, focus_y: Math.round(((f.y + f.height / 2) / H) * 1000) / 1000 }));
         return reply({
             faces_found: faces.length, image_size: [W, H], faces: out,
-            hint: faces.length ? undefined : "No faces found. Try sensitivity='loose'. Drawings/cartoons are not supported.",
-        }, faces.length ? await drawBoxes(l.img, faces) : null);
+            hint: faces.length ? undefined
+                : "No faces found. For a photo, try sensitivity='loose'. For drawings, cartoons, logos or anything the detector " +
+                  'missed: the attached preview has a labelled pixel grid (red = x, blue = y); read the area from it and call ' +
+                  'blur_image with regions=[{x, y, width, height}] (shape "ellipse" suits faces).',
+        }, faces.length ? await drawBoxes(l.img, faces) : await drawGrid(l.img));
     });
 }

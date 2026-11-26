@@ -49,7 +49,9 @@ export function register(server: McpServer): void {
         description: 'Creates a copy with blur or pixelation on: the whole image; one or more chosen regions (hide a name, email, number plate); ' +
             "every face found automatically (detect='faces'); or everything EXCEPT the regions/faces (invert=true, background blur). Regions " +
             'can be rectangles or ellipses, and `feather` controls how smoothly the blur fades out at the edges. Face detection is classic ' +
-            '(no AI download): it works on real photos, not drawings. Use detect_faces first to see the faces and blur only some of them.',
+            '(no AI download): it works on real photos, not drawings. Use detect_faces first to see the faces and blur only some of them. ' +
+            'For drawings, cartoons, logos or text, pass `regions` yourself: get_image_info(grid=true) shows a pixel grid to read them from. ' +
+            'With no regions and no detection, the whole image is blurred.',
         input: z.object({
             image: imageSource(),
             detect: z.enum(['none', 'faces']).default('none').describe("'faces' = automatically find every face in a photo and blur it. Combine with invert=true to keep faces sharp and blur the background."),

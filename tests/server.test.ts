@@ -79,7 +79,7 @@ describe('remote (Streamable HTTP at /mcp)', () => {
     it('upload link -> upload HEIC -> edit -> download', async () => {
         const link = data(await client.callTool({ name: 'create_upload_link', arguments: {} }));
         expect(link.message_for_user).toContain(link.upload_page);
-        expect(link.direct_upload).toMatch(/^curl .*--data-binary/);
+        expect(link.direct_upload).toMatch(/^curl .*-F "file=@/);
         const page = await fetch(link.upload_page);
         expect(page.status).toBe(200);
         const t = new URL(link.upload_page).searchParams.get('t')!;
@@ -98,6 +98,15 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(dl.headers.get('content-type')).toBe('image/jpeg');
         expect(dl.headers.get('content-disposition')).toMatch(/^attachment/);
         expect((await fetch(out.output)).headers.get('content-disposition')).toMatch(/^inline/);
+
+        // multipart form upload (curl -F file=@...), as printed in direct_upload
+        const form = new FormData();
+        form.append('file', new Blob([fs.readFileSync(FIX('astronaut.jpg'))], { type: 'image/jpeg' }), 'me photo.jpg');
+        const mp = await fetch(`${BASE}/upload?t=${encodeURIComponent(t)}`, { method: 'POST', body: form });
+        const mpj = await mp.json();
+        expect(mp.status).toBe(200);
+        expect(mpj.format).toBe('jpg');
+        expect(mpj.image).toMatch(/me_photo_upload\.jpg$/);
 
         expect((await fetch(`${BASE}/upload?t=123.abc`)).status).toBe(403);
         const junk = await fetch(`${BASE}/upload?t=${encodeURIComponent(t)}&name=x.png`, { method: 'POST', body: 'hello' });
@@ -119,6 +128,24 @@ describe('remote (Streamable HTTP at /mcp)', () => {
             },
         }));
         expect([pipe.width, pipe.format]).toEqual([200, 'webp']);
+    }, 30_000);
+
+    it('get_image_info shows a preview and a coordinate grid; no-face images get a grid to pick regions', async () => {
+        const b64 = fs.readFileSync(FIX('astronaut.jpg')).toString('base64');
+        const info = await client.callTool({ name: 'get_image_info', arguments: { image: b64, grid: true } });
+        expect(info.content.some((c: any) => c.type === 'image')).toBe(true);
+        expect(data(info).grid).toMatch(/red labels = x/);
+        const plain = await client.callTool({ name: 'get_image_info', arguments: { image: b64, preview: false } });
+        expect(plain.content.some((c: any) => c.type === 'image')).toBe(false);
+        // a flat drawing: no faces, but a grid preview comes back and manual regions blur fine
+        const { default: sharp } = await import('sharp');
+        const drawing = (await sharp({ create: { width: 300, height: 200, channels: 3, background: '#ffcc00' } }).png().toBuffer()).toString('base64');
+        const nf = await client.callTool({ name: 'detect_faces', arguments: { image: drawing } });
+        expect(data(nf).faces_found).toBe(0);
+        expect(data(nf).hint).toMatch(/regions/);
+        expect(nf.content.some((c: any) => c.type === 'image')).toBe(true);
+        const bl = data(await client.callTool({ name: 'blur_image', arguments: { image: drawing, regions: [{ x: 50, y: 40, width: 100, height: 80 }], shape: 'ellipse' } }));
+        expect(bl.regions_blurred).toBe(1);
     }, 30_000);
 
     it('returns clean errors, never crashes', async () => {

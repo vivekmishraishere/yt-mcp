@@ -80,7 +80,7 @@ export async function blurWithInfo(img: Img, p: BlurParams = {}): Promise<{ img:
     if (detect === 'faces') {
         faces = await detectFaces(img, p.sensitivity ?? 'balanced');
         if (!faces.length)
-            throw new OpError("No faces were detected. The detector works on real photos (not drawings); try sensitivity='loose', or pass the region(s) yourself with x/y/width/height or regions.");
+            throw new OpError("No faces were detected. The detector works on real photos (not drawings); try sensitivity='loose', or pass the region(s) yourself with regions=[{x, y, width, height}] (call get_image_info with grid=true to read pixel coordinates off a grid).");
         boxes.push(...grow(faces.map(f => [f.x, f.y, f.width, f.height] as Box), padFaces));
     }
     if (invert && !boxes.length) throw new OpError("invert=true (background blur) needs a region to keep sharp, or detect='faces'.");

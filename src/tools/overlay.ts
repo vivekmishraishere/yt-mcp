@@ -159,7 +159,10 @@ export function register(server: McpServer): void {
                 upload_page: page,
                 expires_at: expiresAt.toISOString(),
                 message_for_user: `Please upload your image here: ${page}\nAfter it uploads, tap "Copy link" and paste the link back into this chat.`,
-                direct_upload: `curl -sS --data-binary @"/path/to/image.jpg" "${baseUrl()}/upload?t=${token}&name=image.jpg"`,
+                direct_upload: `curl -sS -F "file=@/path/to/image.jpg" "${baseUrl()}/upload?t=${token}"`,
+                direct_upload_note: `Only for agents with a shell whose network can reach ${new URL(baseUrl()).hostname} (claude.ai's code sandbox ` +
+                    'usually cannot unless the user allows that domain for code execution). It prints JSON whose `image` field is the link to use. ' +
+                    'Do not upload the user\'s image to third-party hosts (gists, image hosts) without asking them.',
                 next_step: 'Send message_for_user to the user and wait for the pasted link (it contains /files/). Then call the edit tool with image=<that link>.',
             });
         });

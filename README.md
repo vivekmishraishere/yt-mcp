@@ -21,10 +21,10 @@ R = read-only. W = writes a new result file.
 
 | # | Tool | R/W | What it does | Typical use |
 |---|---|---|---|---|
-| 1 | `get_image_info` | R | Size, megapixels, ratio, format, file size, transparency, EXIF, GPS check | "Does this photo reveal my location?" |
+| 1 | `get_image_info` | R | Size, format, EXIF, GPS check, preview; `grid=true` adds a labelled pixel grid for picking regions | "Does this photo reveal my location?" |
 | 2 | `list_images` | R | Local: images in a folder. Remote with a token: recent uploads/results. Public server: disabled, for privacy | "Use my latest screenshot" |
 | 3 | `extract_color_palette` | R | Dominant colors as hex + %, with swatch | Brand / ring colors |
-| 4 | `detect_faces` | R | Numbered face boxes + focus points + preview | Blur one person; frame a profile photo |
+| 4 | `detect_faces` | R | Numbered face boxes + focus points + preview (a pixel grid when none are found, e.g. cartoons) | Blur one person; frame a profile photo |
 | 5 | `crop_image` | W | Crop by aspect ratio (focus/zoom) or exact box | Square post, 16:9 frame |
 | 6 | `crop_to_circle` | W | Round transparent PNG, optional outline | Avatar |
 | 7 | `create_profile_ring` | W | Circle photo + ring/arc with curved label, 7 styles, custom colors | LinkedIn #OPENTOWORK / #HIRING |
@@ -63,7 +63,12 @@ only receive text arguments). The server's instructions and tool descriptions te
 2. Upload the image there (works on phone too, HEIC included) and paste the link it shows back into the chat.
 3. That link works as `image` in every tool. Public direct image URLs and base64 work too.
 4. Agents that can run shell commands with internet access can skip the manual step: `create_upload_link` also returns a
-   ready `curl --data-binary` command (`direct_upload`) that uploads the file and prints its link.
+   ready `curl -F "file=@..."` command (`direct_upload`; raw bodies work too) that uploads the file and prints its link.
+   claude.ai's code sandbox can only reach a few allowed domains, so there the upload page is the normal route.
+
+Why not pass the chat attachment itself? MCP tools receive only text arguments, and files in claude.ai's sandbox
+(`/mnt/user-data/uploads/...`) exist only inside that sandbox, so no remote server can read them. Base64 works for small
+images, but a 1-2 MB photo is millions of characters, too much for one tool call.
 
 Every tool call is logged as one line (tool name, kind of input, duration, error text; never image data), so you can see
 in hPanel → Node.js → Runtime logs what a client actually sent when something does not work.

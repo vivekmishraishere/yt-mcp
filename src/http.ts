@@ -43,6 +43,27 @@ function makeLimiter(perMinute: number) {
     };
 }
 
+/** First file part of a multipart/form-data body (curl -F file=@photo.png). Returns null if there is none. */
+export function firstMultipartFile(body: Buffer, contentType: string): { data: Buffer; filename: string } | null {
+    const m = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+    if (!m) return null;
+    const delim = Buffer.from('--' + (m[1] ?? m[2]).trim());
+    let pos = body.indexOf(delim);
+    while (pos >= 0) {
+        const start = pos + delim.length;
+        if (body.slice(start, start + 2).toString() === '--') break; // closing delimiter
+        const headEnd = body.indexOf('\r\n\r\n', start);
+        if (headEnd < 0) break;
+        const headers = body.slice(start, headEnd).toString('utf8');
+        const next = body.indexOf(delim, headEnd + 4);
+        if (next < 0) break;
+        const fn = headers.match(/filename\*?=(?:UTF-8'')?"?([^";\r\n]*)"?/i);
+        if (fn) return { data: body.slice(headEnd + 4, next - 2), filename: decodeURIComponent(fn[1]) || 'upload' };
+        pos = next;
+    }
+    return null;
+}
+
 function tooMany(res: Response, wait: number) {
     res.setHeader('Retry-After', wait);
     return res.status(429).json({ error: 'Too many requests, slow down.' });
@@ -197,10 +218,17 @@ export async function startHttp(): Promise<void> {
         next();
     }, express.raw({ type: () => true, limit: `${config.maxInputMb}mb` }), async (req, res) => {
         try {
-            const buf = req.body as Buffer;
+            let buf = req.body as Buffer;
             if (!Buffer.isBuffer(buf) || !buf.length) return res.status(400).json({ error: 'Empty upload.' });
+            let orig = String(req.query.name ?? 'upload');
+            const ctype = String(req.headers['content-type'] ?? '');
+            if (/^multipart\/form-data/i.test(ctype)) {
+                const part = firstMultipartFile(buf, ctype);
+                if (!part || !part.data.length) return res.status(400).json({ error: 'No file found in the form upload (use -F "file=@photo.png").' });
+                buf = part.data;
+                if (!req.query.name) orig = part.filename;
+            }
             const decoded = await decode(buf); // validates it is a real, supported image within the pixel limit
-            const orig = String(req.query.name ?? 'upload');
             const ext = path.extname(orig).toLowerCase().replace('.jpeg', '.jpg').replace('.heif', '.heic');
             const keepExt = /^\.(jpg|png|webp|heic|avif|gif|tif|tiff|bmp)$/.test(ext) ? ext : '.' + (decoded.sourceFormat ?? 'img');
             const stored = await requestContext.run({ baseUrl: requestBase(req) }, () => saveFile(buf, safeStem(path.basename(orig, path.extname(orig))), 'upload', keepExt));

@@ -215,4 +215,26 @@ export async function drawBoxes(img: Img, boxes: { x: number; y: number; width: 
     return compositeOver(cloneImg(base), await renderSvg(svg, img.width, img.height), 0, 0);
 }
 
+/**
+ * Copy of the image with a labelled pixel grid (lines every 10%), so a model looking at the preview can read off the
+ * pixel coordinates of any area, e.g. for blur_image regions on drawings where face detection cannot help.
+ */
+export async function drawGrid(img: Img, divisions = 10): Promise<Img> {
+    const base = flatten(img);
+    const W = img.width, H = img.height;
+    // sizes relative to the longer side, so labels stay readable after the preview is scaled down to ~768 px
+    const long = Math.max(W, H);
+    const lw = Math.max(1, Math.round(long / 700));
+    const fs = Math.max(11, Math.round(long / 45));
+    let svg = '';
+    for (let i = 1; i < divisions; i++) {
+        const x = Math.round((W * i) / divisions), y = Math.round((H * i) / divisions);
+        svg += `<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="#FF1744" stroke-opacity="0.75" stroke-width="${lw}"/>`;
+        svg += `<line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="#2979FF" stroke-opacity="0.75" stroke-width="${lw}"/>`;
+        svg += `<path d="${pathData(String(x), x + lw * 2, fs + lw, fs)}" fill="#FF1744" stroke="white" stroke-width="${Math.max(2, fs / 6)}" paint-order="stroke"/>`;
+        svg += `<path d="${pathData(String(y), lw * 2, y - lw * 2, fs)}" fill="#2979FF" stroke="white" stroke-width="${Math.max(2, fs / 6)}" paint-order="stroke"/>`;
+    }
+    return compositeOver(cloneImg(base), await renderSvg(svg, W, H), 0, 0);
+}
+
 export { escapeAttr };
