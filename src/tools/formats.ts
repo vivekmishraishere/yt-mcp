@@ -98,8 +98,18 @@ export function register(server: McpServer): void {
             data = l.raw;
             notes.push('already well compressed: kept the original bytes (any other setting would be larger)');
         }
+        let warning: string | undefined;
+        if (data.length > l.raw.length) {
+            const src = (l.sourceFormat ?? 'original').toUpperCase();
+            warning = key !== l.sourceFormat
+                ? `The ${key.toUpperCase()} is LARGER than the ${src} original (${humanSize(l.raw.length)} -> ${humanSize(data.length)}): ` +
+                  `${src} already stores this image more efficiently. Tell the user, and for a smaller file keep the format ` +
+                  `(format 'keep'), use 'avif', or set a lower target_kb.`
+                : `The result is larger than the original because it was resized or re-encoded; the original was already smaller.`;
+        }
         const saved = await saveBytes(data, img, l.name, 'compressed', key);
         return savedReply(saved, l, {
+            warning,
             level: a.target_kb ? undefined : a.level, target_kb: a.target_kb,
             saved_percent: Math.round(1000 * (1 - data.length / Math.max(1, l.raw.length))) / 10,
             size_change: `${humanSize(l.raw.length)} -> ${humanSize(data.length)}`, notes: notes.length ? notes : undefined,

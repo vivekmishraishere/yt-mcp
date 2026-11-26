@@ -164,6 +164,15 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(schema.required).toEqual(['image']);
     });
 
+    it('compress_image warns when a format change makes the file bigger', async () => {
+        const b64 = fs.readFileSync(FIX('astronaut.jpg')).toString('base64');
+        const webp = data(await client.callTool({ name: 'compress_image', arguments: { image: b64, format: 'webp', level: 'small' } }));
+        const back = data(await client.callTool({ name: 'compress_image', arguments: { image: webp.output, format: 'png', level: 'lossless' } }));
+        expect(back.saved_percent).toBeLessThan(0);
+        expect(back.warning).toMatch(/LARGER/);
+        expect(webp.warning).toBeUndefined();
+    }, 30_000);
+
     it('returns clean errors, never crashes', async () => {
         const cases: [string, Record<string, unknown>, RegExp][] = [
             ['get_image_info', { image: '/etc/passwd' }, /file name or path.*create_upload_link/],
