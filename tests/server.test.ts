@@ -101,6 +101,7 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(dl.status).toBe(200);
         expect(dl.headers.get('content-type')).toBe('image/jpeg');
         expect(dl.headers.get('content-disposition')).toMatch(/^attachment/);
+        expect(dl.headers.get('cache-control')).toMatch(/no-transform/); // CDNs must not re-compress results
         expect((await fetch(out.output)).headers.get('content-disposition')).toMatch(/^inline/);
 
         // multipart form upload (curl -F file=@...), as printed in direct_upload

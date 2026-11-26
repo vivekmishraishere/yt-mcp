@@ -233,7 +233,7 @@ export async function startHttp(): Promise<void> {
             const data = await fs.readFile(file);
             res.setHeader('Content-Type', MIME_BY_EXT[path.extname(name).toLowerCase()] ?? 'application/octet-stream');
             res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${name.replace(/^[a-f0-9]{24}__/, '')}"`);
-            res.setHeader('Cache-Control', 'private, max-age=3600');
+            res.setHeader('Cache-Control', 'private, max-age=3600, no-transform');
             res.setHeader('X-Content-Type-Options', 'nosniff');
             res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
             res.send(data);
