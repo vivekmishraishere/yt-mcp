@@ -75,7 +75,7 @@ label:hover{border-color:var(--accent)}input[type=file]{display:none}
 button{margin-top:10px;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:600;cursor:pointer}
 img{max-width:100%;border-radius:8px;margin-top:12px}.err{color:#d93025}
 </style></head><body><div class="card"><h1>Upload an image</h1>
-<p>JPG, PNG, WebP, HEIC, AVIF, GIF, TIFF or BMP, up to ${maxMb} MB. You'll get a link to paste back into your chat.</p>
+<p>JPG, PNG, WebP, HEIC, AVIF, GIF, TIFF or BMP, up to ${maxMb} MB. After uploading, copy the link and paste it back into your Claude chat.</p>
 <label id="drop">Choose or drop an image<input id="file" type="file" accept="image/*,.heic,.heif"></label>
 <div id="status"></div><div id="out"><input id="link" readonly><button id="copy">Copy link</button><img id="prev" alt=""></div></div>
 <script>
@@ -84,7 +84,7 @@ async function send(f){st.className='';st.textContent='Uploading '+f.name+'...';
  const r=await fetch('/upload?t='+encodeURIComponent(t)+'&name='+encodeURIComponent(f.name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f});
  const j=await r.json().catch(()=>({error:'Upload failed ('+r.status+')'}));
  if(!r.ok){st.className='err';st.textContent=j.error||'Upload failed';return}
- st.textContent='Uploaded: '+j.width+'x'+j.height+', '+j.file_size+'. Paste this link into your chat:';
+ st.textContent='Uploaded ('+j.width+'x'+j.height+', '+j.file_size+'). Copy this link and paste it into your Claude chat:';
  document.getElementById('out').style.display='block';document.getElementById('link').value=j.image;document.getElementById('prev').src=j.image;}
 document.getElementById('file').onchange=e=>e.target.files[0]&&send(e.target.files[0]);
 const d=document.getElementById('drop');d.ondragover=e=>{e.preventDefault()};d.ondrop=e=>{e.preventDefault();e.dataTransfer.files[0]&&send(e.dataTransfer.files[0])};
@@ -101,7 +101,16 @@ export async function startHttp(): Promise<void> {
         console.error(`[yt-mcp] OPEN_ACCESS: public server, no token needed. Limits: ${config.rateLimitPerMinute} MCP requests/min, ` +
             `${config.maxConcurrentJobs} jobs at a time, ${config.maxStorageMb} MB storage, files kept ${config.fileTtlHours} h.`);
     }
-    await fs.mkdir(config.storageDir, { recursive: true });
+    try {
+        await fs.mkdir(config.storageDir, { recursive: true });
+        await fs.access(config.storageDir, (await import('node:fs')).constants.W_OK);
+    } catch (e) {
+        const fallback = path.join((await import('node:os')).tmpdir(), 'yt-mcp-files');
+        console.error(`[yt-mcp] STORAGE_DIR ${config.storageDir} is not writable (${(e as Error).message}); using ${fallback}`);
+        config.storageDir = fallback;
+        await fs.mkdir(fallback, { recursive: true });
+    }
+    console.error(`[yt-mcp] storing uploads and results in ${config.storageDir}`);
 
     const app = express();
     app.disable('x-powered-by');
@@ -195,7 +204,7 @@ export async function startHttp(): Promise<void> {
             const ext = path.extname(orig).toLowerCase().replace('.jpeg', '.jpg').replace('.heif', '.heic');
             const keepExt = /^\.(jpg|png|webp|heic|avif|gif|tif|tiff|bmp)$/.test(ext) ? ext : '.' + (decoded.sourceFormat ?? 'img');
             const stored = await requestContext.run({ baseUrl: requestBase(req) }, () => saveFile(buf, safeStem(path.basename(orig, path.extname(orig))), 'upload', keepExt));
-            res.json({ image: stored.ref, width: decoded.img.width, height: decoded.img.height, format: decoded.sourceFormat, file_size: humanSize(buf.length) });
+            res.json({ image: stored.ref, next_step: 'Pass `image` to any yt-mcp tool.', width: decoded.img.width, height: decoded.img.height, format: decoded.sourceFormat, file_size: humanSize(buf.length) });
         } catch (e) {
             res.status(400).json({ error: (e as Error).message });
         }

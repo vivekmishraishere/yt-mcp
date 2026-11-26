@@ -23,14 +23,16 @@ export interface Saved extends Stored {
     img: Img;
 }
 
+const UPLOAD_HINT = 'Next step: call create_upload_link, send the user the upload page, and use the link they paste back.';
+
 export const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.avif', '.gif', '.bmp', '.tif', '.tiff']);
 
 // ------------------------------------------------------------------ local paths
 
 export async function resolveLocalPath(raw: string, mustExist = true): Promise<string> {
     if (!config.allowLocalPaths)
-        throw new OpError('File paths are not available on this remote server. Give an https URL, base64 data, ' +
-            'a link returned by an earlier tool, or upload the file with create_upload_link.');
+        throw new OpError(`"${raw.slice(0, 80)}" is a file name or path, and this remote server cannot read files from the user's ` +
+            "device or from the chat (attachments included). " + UPLOAD_HINT);
     let p = raw.trim().replace(/^["']|["']$/g, '');
     if (p.startsWith('~')) p = path.join(os.homedir(), p.slice(1));
     if (!path.isAbsolute(p)) throw new OpError(`Please pass an absolute path (got "${raw}"), e.g. /Users/you/Downloads/photo.jpg.`);
@@ -107,7 +109,11 @@ async function fetchUrl(source: string): Promise<Buffer> {
             url = new URL(res.headers.get('location')!, url);
             continue;
         }
-        if (!res.ok) throw new OpError(`Download failed: HTTP ${res.status} for ${url.href}`);
+        if (!res.ok) throw new OpError(`Could not download the image: ${url.href} answered HTTP ${res.status}` +
+            (res.status === 401 || res.status === 403 ? ' (it needs a login or blocks downloads). ' + UPLOAD_HINT : '.'));
+        if (/text\/html/i.test(res.headers.get('content-type') ?? ''))
+            throw new OpError(`${url.href} is a web page, not an image file. Use the direct image address (right-click the image -> ` +
+                '"Copy image address"), or ' + UPLOAD_HINT.charAt(0).toLowerCase() + UPLOAD_HINT.slice(1));
         const declared = Number(res.headers.get('content-length') ?? 0);
         if (declared > limit) throw new OpError(`Remote image is larger than ${config.maxInputMb} MB.`);
         const chunks: Buffer[] = [];
@@ -134,7 +140,7 @@ function looksLikeBase64(s: string): boolean {
 }
 
 export async function loadImage(source: string): Promise<Loaded> {
-    if (!source || !source.trim()) throw new OpError('No image given. Pass an https URL, base64 data, or (locally) a file path.');
+    if (!source || !source.trim()) throw new OpError(config.mode === 'http' ? 'No image given. ' + UPLOAD_HINT : 'No image given. Pass a file path, an https URL or base64 data.');
     const s = source.trim();
     let raw: Buffer;
     let name = 'image';
@@ -145,7 +151,8 @@ export async function loadImage(source: string): Promise<Loaded> {
         try {
             raw = await fs.readFile(stored);
         } catch {
-            throw new OpError('That file link has expired or does not exist. Run the earlier step again, or upload the image again.');
+            throw new OpError(`That file link has expired (files are kept ${config.fileTtlHours} h) or does not exist. ` +
+                'If it was an upload, ' + UPLOAD_HINT.charAt(0).toLowerCase() + UPLOAD_HINT.slice(1) + ' If it was a result, run that step again on the original.');
         }
         name = path.basename(stored).replace(/^[a-f0-9]{24}__/, '').replace(/\.[^.]+$/, '');
         if (config.mode === 'stdio') filePath = stored;
@@ -171,7 +178,14 @@ export async function loadImage(source: string): Promise<Loaded> {
     }
     if (raw.length === 0) throw new OpError('The image data is empty.');
     if (raw.length > config.maxInputMb * 1024 * 1024) throw new OpError(`Image data is larger than ${config.maxInputMb} MB.`);
-    const decoded = await decode(raw);
+    let decoded: Decoded;
+    try {
+        decoded = await decode(raw);
+    } catch (e) {
+        if (name === 'pasted' && e instanceof OpError && /Could not read/.test(e.message))
+            throw new OpError('The base64 text is not a valid image (it may be cut off, or typed out from an image you can only see). ' + UPLOAD_HINT);
+        throw e;
+    }
     return { ...decoded, name: safeStem(name), raw, path: filePath };
 }
 
@@ -216,7 +230,7 @@ export async function reply(summary: Record<string, unknown>, preview?: Img | nu
 
 export function outputFields(saved: Saved): Record<string, unknown> {
     return config.mode === 'http'
-        ? { output: saved.ref, download_url: saved.url, format: saved.format, width: saved.width, height: saved.height, file_size: humanSize(saved.sizeBytes) }
+        ? { output: saved.ref, download_url: `${saved.url}?download=1`, format: saved.format, width: saved.width, height: saved.height, file_size: humanSize(saved.sizeBytes) }
         : { output_path: saved.path, format: saved.format, width: saved.width, height: saved.height, file_size: humanSize(saved.sizeBytes) };
 }
 
@@ -225,7 +239,7 @@ export async function savedReply(saved: Saved, loaded?: Loaded | null, extra: Re
     if (loaded) summary.original = { width: loaded.img.width, height: loaded.img.height, format: loaded.sourceFormat, file_size: humanSize(loaded.raw.length) };
     Object.assign(summary, extra);
     summary.tip = config.mode === 'http'
-        ? 'Pass `output` as the image to another tool to keep editing. download_url opens or downloads the file (expires in ' + config.fileTtlHours + 'h).'
+        ? 'Give the user download_url as a clickable link (expires in ' + config.fileTtlHours + ' h). To keep editing, pass `output` as `image` to the next tool.'
         : 'Pass output_path to another tool to keep editing, or save_image_to_folder to keep it.';
     return reply(summary, preview ? saved.img : null);
 }

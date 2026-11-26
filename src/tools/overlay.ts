@@ -147,15 +147,20 @@ export function register(server: McpServer): void {
     } else {
         registerTool(server, 'create_upload_link', {
             title: 'Create upload link',
-            description: "Creates a private, expiring web page where the user can upload an image from their computer or phone (the remote " +
-                "server cannot read their files, and images attached in chat cannot be passed to tools). Give the user the link; after " +
-                'uploading, the page shows an image link they paste back, which works as `image` in every tool.',
+            description: 'Call this FIRST whenever the user wants to edit an image that is attached in the chat or stored on their ' +
+                'computer or phone (those cannot be passed to tools directly). Returns an upload page link: send it to the user and ' +
+                "wait. They upload the image there (JPG, PNG, HEIC, WebP...) and paste back a link ending in the file name; pass that " +
+                'link as `image` to any tool. Also returns `direct_upload`, a curl command for agents that can run shell commands.',
             input: z.object({ expires_minutes: z.number().int().min(5).max(1440).default(60).describe('How long the link works (default 60 minutes).') }),
         }, async a => {
             const { token, expiresAt } = makeUploadToken(a.expires_minutes);
+            const page = `${baseUrl()}/upload?t=${token}`;
             return reply({
-                upload_page: `${baseUrl()}/upload?t=${token}`, expires_at: expiresAt.toISOString(),
-                instructions: 'Open the upload page, choose an image (max ' + config.maxInputMb + ' MB), then paste the image link it shows back into the chat.',
+                upload_page: page,
+                expires_at: expiresAt.toISOString(),
+                message_for_user: `Please upload your image here: ${page}\nAfter it uploads, tap "Copy link" and paste the link back into this chat.`,
+                direct_upload: `curl -sS --data-binary @"/path/to/image.jpg" "${baseUrl()}/upload?t=${token}&name=image.jpg"`,
+                next_step: 'Send message_for_user to the user and wait for the pasted link (it contains /files/). Then call the edit tool with image=<that link>.',
             });
         });
     }

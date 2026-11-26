@@ -43,8 +43,8 @@ export function register(server: McpServer): void {
         title: config.mode === 'http' ? (config.openAccess ? 'List images (not available on a public server)' : 'List recent images on the server') : 'List images in a folder',
         readOnly: true,
         description: config.mode === 'http' && config.openAccess
-            ? 'On this public server, stored images are private to whoever has their link, so they cannot be listed. Use the ' +
-              '`output` link from an earlier tool result, or call create_upload_link to get an image in.'
+            ? 'Not available on this public server (files are private to whoever has their link), so do not use it to find the ' +
+              "user's image. Use the `output` link of an earlier result, or call create_upload_link to get a new image in."
             : config.mode === 'http'
             ? 'Lists the most recent images stored on this server (your uploads and every tool result), newest first, with links ' +
               'you can pass to any other tool. Files expire after ' + config.fileTtlHours + ' hours.'

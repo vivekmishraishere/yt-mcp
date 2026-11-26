@@ -56,11 +56,17 @@ Also: 4 resources (`image-mcp://presets/social`, `…/filters`, `…/profile-rin
 
 ### Getting images into a remote server
 
-A remote server cannot read your computer, and an image attached in a Claude chat is not passed to tools. So:
+A remote server cannot read your computer, and an image attached in a Claude chat is not passed to tools (MCP tools
+only receive text arguments). The server's instructions and tool descriptions tell Claude to handle this itself:
 
 1. Ask Claude for an upload link: it calls `create_upload_link` and gives you a private page (expires in 60 min).
 2. Upload the image there (works on phone too, HEIC included) and paste the link it shows back into the chat.
-3. That link works as `image` in every tool. Public `https://` image URLs and base64 work too.
+3. That link works as `image` in every tool. Public direct image URLs and base64 work too.
+4. Agents that can run shell commands with internet access can skip the manual step: `create_upload_link` also returns a
+   ready `curl --data-binary` command (`direct_upload`) that uploads the file and prints its link.
+
+Every tool call is logged as one line (tool name, kind of input, duration, error text; never image data), so you can see
+in hPanel → Node.js → Runtime logs what a client actually sent when something does not work.
 
 ## Requirements
 
@@ -91,6 +97,8 @@ Hostinger's web hosting runs Node.js apps (Python needs a VPS), which is why thi
    | Connect with | `https://mcp.yourdomain.com/mcp` | the URL plus the token (see below) |
 
    Always also set `PUBLIC_BASE_URL` to your app's address, e.g. `https://mcp.yourdomain.com` (no trailing slash).
+   Recommended on Hostinger: `STORAGE_DIR=/home/<your-user>/yt-mcp-files` (a folder that survives restarts and is shared by
+   all app processes) and `UPLOAD_SECRET=<openssl rand -hex 32>` (so upload links keep working across restarts).
    Optional: anything from [`.env.example`](.env.example). `PORT` is set by Hostinger automatically.
 4. Deploy, then check `https://mcp.yourdomain.com/health` returns `{"ok":true,...}` and `https://mcp.yourdomain.com/`
    shows `"access":"public"` (or `"token"`).

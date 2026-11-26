@@ -9,7 +9,10 @@ import { POSITIONS } from '../core/ops/overlay.js';
 export { z };
 
 export const imageSource = () => z.string().min(1).describe(config.mode === 'http'
-    ? 'The image: an https URL, a link returned by an earlier tool (`output`), or base64 / data-URI text. To use a file from your computer, call create_upload_link first.'
+    ? 'Image to use. One of: (a) a link to this server\'s files (".../files/...") from the upload page or an earlier result\'s `output`; ' +
+      '(b) a public direct image URL (the image file itself, not a web page); (c) base64 / data:image/...;base64 text you actually have. ' +
+      'NOT accepted: images attached in chat, file names or paths (/Users/..., /mnt/...), or base64 typed out from an image you can see. ' +
+      'If the user\'s image is in the chat or on their device, call create_upload_link first.'
     : "The image: an absolute file path (e.g. '/Users/me/Downloads/IMG_0042.HEIC'), an http(s) URL, or base64 / data-URI text. The output_path returned by any earlier tool also works.");
 
 export const focusX = () => z.number().min(0).max(1).default(0.5)
@@ -49,6 +52,43 @@ async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
     }
 }
 
+
+// ------------------------------------------------------------------ "use when" lines (help the model pick the right tool)
+
+/** Typical user requests per tool, appended to each description as "Use for: ...". Keep them short and concrete. */
+const USE_FOR: Record<string, string> = {
+    get_image_info: '"how big is this image", "what format/resolution is it", "does this photo contain my location".',
+    list_images: '"use my latest screenshot", "what images are in Downloads" (local folders only).',
+    extract_color_palette: '"what colors are in this logo", "give me the hex codes", "pick a matching ring/text color".',
+    detect_faces: '"how many people are in this photo", finding a face before blurring only some faces or framing a profile photo.',
+    crop_image: '"make it square", "crop to 16:9 / 4:5", "cut out this area", "remove the edges".',
+    crop_to_circle: '"make a round profile picture / avatar" with no ring.',
+    create_profile_ring: '"LinkedIn profile photo", "#OPENTOWORK / #HIRING frame", "add a colored ring/border around my round photo".',
+    resize_image: '"resize to 1080 px wide", "make it half the size", "exactly 800x600".',
+    upscale_image: '"upscale", "make it bigger / higher resolution", "enlarge this small logo 2x" (classic, no AI detail).',
+    rotate_or_flip_image: '"rotate 90 degrees", "it is sideways/upside down", "mirror / un-mirror my selfie".',
+    resize_for_social: '"make it fit an Instagram story / post", "YouTube thumbnail", "LinkedIn banner", "X header".',
+    add_border: '"add a white border / frame", "add padding around it".',
+    round_corners: '"round the corners", "app-icon / card look".',
+    trim_borders: '"remove the white space / black bars around it", "auto-crop the empty edges".',
+    convert_image_format: '"convert HEIC to JPG", "make it PNG / WebP / AVIF", "turn it into a PDF or favicon .ico".',
+    compress_image: '"reduce the file size", "make it under 200 KB", "optimize for the web / email" without visible quality loss.',
+    batch_convert_images: 'converting or compressing several images at once ("all these HEIC photos to JPG").',
+    strip_image_metadata: '"remove location / EXIF data", "make it safe to share publicly".',
+    create_icon_set: '"make a favicon", "app icons in all sizes".',
+    apply_filter: '"black and white / B&W / monochrome" (grayscale or noir), "old photo / retro" (sepia, vintage), "sketch", "cartoon", "warmer / cooler look".',
+    adjust_image: '"brighter / darker", "more contrast", "more / less saturated", "sharper", "warmer / cooler" by a chosen amount.',
+    blur_image: '"blur the faces", "hide this name / email / number plate", "blur the background", "pixelate part of it", soft blur edges.',
+    auto_enhance_image: '"fix / improve / enhance this photo", "it is too dark or dull" when no specific setting is named.',
+    add_text_to_image: '"add a caption / title / headline", "write my name on it", meme or quote text.',
+    add_watermark: '"add my watermark / logo", "protect this photo", "\u00a9 name in the corner" or tiled.',
+    remove_solid_background: '"remove the white / plain background", "make the logo transparent" (not busy photo backgrounds).',
+    create_collage: '"combine these photos into a grid", "before/after side by side".',
+    run_image_pipeline: 'any request with 2+ edits on one image, e.g. "crop square, make B&W, add text, export WebP".',
+    save_image_to_folder: '"save it to my Desktop / Downloads".',
+    create_upload_link: 'every request about an image the user attached in chat or has on their device. Do this before any other tool.',
+};
+
 // ------------------------------------------------------------------ registration
 
 export interface ToolDef<S extends z.ZodObject> {
@@ -56,6 +96,17 @@ export interface ToolDef<S extends z.ZodObject> {
     description: string;
     input: S;
     readOnly?: boolean;
+}
+
+/** What kind of image input a call used, for logs (never the data itself). */
+function describeInput(v: unknown): string {
+    if (typeof v !== 'string') return '-';
+    const s = v.trim();
+    if (/\/files\/[a-f0-9]{24}__/.test(s)) return 'stored-link';
+    if (/^https?:\/\//i.test(s)) { try { return 'url:' + new URL(s).hostname; } catch { return 'bad-url'; } }
+    if (/^data:/i.test(s)) return `data-uri(${s.length})`;
+    if (s.length > 200 && !s.includes('.')) return `base64(${s.length})`;
+    return `other:${JSON.stringify(s.slice(0, 40))}`;
 }
 
 export function errorReply(e: unknown, tool: string): ToolReply {
@@ -69,7 +120,7 @@ export function registerTool<S extends z.ZodObject>(server: McpServer, name: str
     handler: (args: z.infer<S>) => Promise<ToolReply>): void {
     server.registerTool(name, {
         title: def.title,
-        description: def.description,
+        description: USE_FOR[name] && !(name === 'list_images' && config.mode === 'http') ? `${def.description} Use for: ${USE_FOR[name]}` : def.description,
         inputSchema: def.input,
         annotations: {
             title: def.title,
@@ -79,10 +130,17 @@ export function registerTool<S extends z.ZodObject>(server: McpServer, name: str
             openWorldHint: true, // may fetch image URLs
         },
     }, (async (args: z.infer<S>) => {
+        const t = Date.now();
+        let result: ToolReply;
         try {
-            return await withSlot(() => handler(args));
+            result = await withSlot(() => handler(args));
         } catch (e) {
-            return errorReply(e, name);
+            result = errorReply(e, name);
         }
+        if (config.mode === 'http') {
+            const err = result.isError ? ` ERROR: ${String((result.content[0] as { text?: string })?.text ?? '').slice(0, 160)}` : ' ok';
+            console.error(`[yt-mcp] tool ${name} image=${describeInput((args as { image?: unknown }).image)} ${Date.now() - t}ms${err}`);
+        }
+        return result;
     }) as any);
 }

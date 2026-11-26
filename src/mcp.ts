@@ -13,12 +13,26 @@ import { register as registerLook } from './tools/look.js';
 import { register as registerOverlay } from './tools/overlay.js';
 
 const INSTRUCTIONS = config.mode === 'http'
-    ? `Image editing tools on a remote server. Inputs: an https URL, a link returned by an earlier tool (\`output\`), or base64.
-This server cannot read the user's computer, and images attached in chat cannot be passed to tools: call create_upload_link and
-give the user the page; they upload and paste back the image link. Every result is a NEW file: the reply has \`output\` (pass it to
-the next tool), \`download_url\` (give it to the user) and an inline preview. Files expire after ${config.fileTtlHours} hours.
-For 2+ edits on one image prefer run_image_pipeline (one save, no quality loss).${config.openAccess ? `
-This is a public server shared by many people: links are private to whoever holds them, and list_images is not available.` : ''}`
+    ? `Image editing tools (crop, resize, convert, compress, filters, blur, text, profile rings) running on a remote server.
+
+STEP 1: GET THE IMAGE IN. Every tool's \`image\` argument must be one of:
+  a) a link to this server's files (".../files/..."): from the upload page, or the \`output\` of an earlier tool;
+  b) a public, direct image URL (the address of the image file itself, not of a web page);
+  c) base64 or data:image/...;base64 text that you actually have as text.
+An image the user attached or pasted in chat CANNOT be passed to these tools, and neither can file names or paths
+(e.g. "photo.jpg", "/Users/...", "/mnt/user-data/uploads/..."). Never type out base64 for an image you can only see.
+So when the user's image is in the chat or on their device: call create_upload_link FIRST, send the user the upload page
+link with a one-line instruction, and wait. They upload it and paste back a ".../files/..." link: use that as \`image\`.
+(If you can run shell commands with internet access and have the file, you may instead run the \`direct_upload\` command
+that create_upload_link returns, then use the \`image\` link it prints.)
+
+STEP 2: EDIT. One edit: call the matching tool. Two or more edits on one image: use run_image_pipeline (one save, no
+quality loss). To continue editing a result, pass its \`output\` link as \`image\`.
+
+STEP 3: DELIVER. Each result is a new file. Always give the user \`download_url\` as a clickable link (it expires after
+${config.fileTtlHours} hours). The attached preview is a smaller copy for you to check the result, not the file itself.
+Originals are never changed.${config.openAccess ? `
+This is a public server shared by many people: file links are private to whoever holds them, and list_images is disabled.` : ''}`
     : `Local image editing tools. Inputs: an absolute file path, an http(s) URL, or base64.
 Originals are never modified: every edit is saved as a NEW file in ${config.storageDir} and the reply includes its output_path
 (pass it to the next tool) plus an inline preview. For 2+ edits on one image prefer run_image_pipeline (one save, no quality loss).

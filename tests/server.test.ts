@@ -71,10 +71,15 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(tools.map(t => t.name)).toContain('create_upload_link');
         expect(tools.map(t => t.name)).not.toContain('save_image_to_folder');
         for (const t of tools) expect((t.description ?? '').length).toBeGreaterThan(40);
+        for (const t of tools.filter(t => t.name !== 'list_images')) expect(t.description, t.name).toContain('Use for:');
+        expect(tools.find(t => t.name === 'create_upload_link')!.description).toMatch(/FIRST/);
+        expect(client.getInstructions()).toMatch(/STEP 1[\s\S]*create_upload_link[\s\S]*download_url/);
     });
 
     it('upload link -> upload HEIC -> edit -> download', async () => {
         const link = data(await client.callTool({ name: 'create_upload_link', arguments: {} }));
+        expect(link.message_for_user).toContain(link.upload_page);
+        expect(link.direct_upload).toMatch(/^curl .*--data-binary/);
         const page = await fetch(link.upload_page);
         expect(page.status).toBe(200);
         const t = new URL(link.upload_page).searchParams.get('t')!;
@@ -91,6 +96,8 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         const dl = await fetch(out.download_url);
         expect(dl.status).toBe(200);
         expect(dl.headers.get('content-type')).toBe('image/jpeg');
+        expect(dl.headers.get('content-disposition')).toMatch(/^attachment/);
+        expect((await fetch(out.output)).headers.get('content-disposition')).toMatch(/^inline/);
 
         expect((await fetch(`${BASE}/upload?t=123.abc`)).status).toBe(403);
         const junk = await fetch(`${BASE}/upload?t=${encodeURIComponent(t)}&name=x.png`, { method: 'POST', body: 'hello' });
@@ -116,7 +123,9 @@ describe('remote (Streamable HTTP at /mcp)', () => {
 
     it('returns clean errors, never crashes', async () => {
         const cases: [string, Record<string, unknown>, RegExp][] = [
-            ['get_image_info', { image: '/etc/passwd' }, /not available on this remote server/],
+            ['get_image_info', { image: '/etc/passwd' }, /file name or path.*create_upload_link/],
+            ['get_image_info', { image: '/mnt/user-data/uploads/IMG_2041.jpeg' }, /create_upload_link/],
+            ['get_image_info', { image: 'A'.repeat(400) }, /base64 text is not a valid image.*create_upload_link/],
             ['get_image_info', { image: 'http://127.0.0.1:22/x.png' }, /private\/local address/],
             ['get_image_info', { image: `${BASE}/files/0123456789abcdef01234567__gone.png` }, /expired/],
             ['crop_image', { image: fs.readFileSync(FIX('astronaut.jpg')).toString('base64'), x: 9000, y: 0, width: 5, height: 5 }, /outside the image/],
