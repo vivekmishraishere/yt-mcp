@@ -25,10 +25,10 @@ An image attached in chat CANNOT be passed to these tools directly, and neither 
 (e.g. "photo.jpg", "/Users/...", "/mnt/user-data/uploads/..."). Get it onto the server with the first option that works:
   0. If upload_image_file can take the attachment as \`file\`, use it: the app sends the bytes itself, instantly.
   1. Shell with internet access and the file: run the \`direct_upload\` curl command from create_upload_link (fast, lossless).
-  2. You can read the file (e.g. the attachment in your code sandbox) but have no internet: upload it YOURSELF with
-     upload_image_data (base64 in small checksummed blocks; resend only the blocks it rejects). No user action needed.
-  3. You can only see the image (no file access): call create_upload_link, send the user the upload page, wait for the
-     ".../files/..." link they paste back.
+  2. Otherwise call create_upload_link, send the user the upload page (one tap, full quality), and wait for the
+     ".../files/..." link they paste back. This is the normal route in claude.ai today.
+  3. Only for a tiny image (base64 under 20,000 characters) whose file you can read: upload_image_data. Copying base64
+     by hand is slow and error-prone; do not use it for photos.
 Never type out base64 for an image you can only see. Uploads are deleted ${config.uploadTtlMinutes} minutes after their last use.
 
 STEP 2: EDIT. One edit: call the matching tool. Two or more edits on one image: use run_image_pipeline (one save, no

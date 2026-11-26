@@ -181,9 +181,11 @@ describe('remote (Streamable HTTP at /mcp)', () => {
     it('upload_image_data: the AI uploads in checksummed blocks; only bad blocks are resent', async () => {
         const { createHash } = await import('node:crypto');
         const sum = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 8);
-        const orig = fs.readFileSync(FIX('astronaut.jpg'));
+        const { default: sharp } = await import('sharp');
+        const orig = await sharp(FIX('astronaut.jpg')).resize(128).jpeg({ quality: 80 }).toBuffer(); // icon-sized
         const b64 = orig.toString('base64');
         const blocks = Array.from({ length: Math.ceil(b64.length / 1000) }, (_, i) => b64.slice(i * 1000, (i + 1) * 1000));
+        expect(b64.length).toBeLessThan(20_000);
         const total = blocks.length;
         // first call: blocks 1-10, with copy mistakes in 3 and 7 (one changed letter, one doubled digit)
         const send = blocks.slice(0, 10).map((d, i) => ({ n: i + 1, data: d, checksum: sum(d) }));
@@ -191,13 +193,13 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         send[6] = { ...send[6], data: send[6].data.slice(0, 80) + '0' + send[6].data.slice(80) };
         const r1 = data(await client.callTool({ name: 'upload_image_data', arguments: { blocks: send, total_blocks: total, filename: 'IMG 2041.jpg' } }));
         expect(r1.rejected).toBe('3, 7');
-        expect(r1.received).toBe(8);
+        expect(r1.received).toBe(Math.min(10, total) - 2);
         expect(r1.next_step).toMatch(/Resend block\(s\) 3, 7/);
         // resend the two bad blocks plus the rest, in any order
         const rest = [3, 7, ...Array.from({ length: total - 10 }, (_, i) => i + 11)].map(n => ({ n, data: blocks[n - 1], checksum: sum(blocks[n - 1]) })).reverse();
         const done = await client.callTool({ name: 'upload_image_data', arguments: { blocks: rest, upload_id: r1.upload_id } });
         const up = data(done);
-        expect([up.width, up.height, up.format, up.blocks]).toEqual([320, 320, 'jpg', total]);
+        expect([up.width, up.height, up.format, up.blocks]).toEqual([128, 128, 'jpg', total]);
         expect(up.image).toMatch(/IMG_2041_upload\.jpg$/);
         const stored = Buffer.from(await (await fetch(up.image)).arrayBuffer());
         expect(stored.equals(orig)).toBe(true); // byte-exact
@@ -205,6 +207,8 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         // first call must say how many blocks; unknown ids are refused clearly
         const noTotal = await client.callTool({ name: 'upload_image_data', arguments: { blocks: [{ n: 1, data: blocks[0], checksum: sum(blocks[0]) }] } });
         expect(text(noTotal)).toMatch(/total_blocks/);
+        const tooBig = await client.callTool({ name: 'upload_image_data', arguments: { total_blocks: 39, blocks: [{ n: 1, data: blocks[0], checksum: sum(blocks[0]) }] } });
+        expect(text(tooBig)).toMatch(/too big to copy by hand.*create_upload_link/);
         const badId = await client.callTool({ name: 'upload_image_data', arguments: { blocks: [{ n: 1, data: 'AAAA', checksum: sum('AAAA') }], upload_id: 'ffffffffffffffff' } });
         expect(text(badId)).toMatch(/expired|does not exist/);
     }, 30_000);
@@ -283,8 +287,10 @@ describe('public server (OPEN_ACCESS=1, no token)', () => {
         const b64 = fs.readFileSync(FIX('astronaut.jpg')).toString('base64');
         const { createHash } = await import('node:crypto');
         const sum = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 8);
+        const { default: sharp } = await import('sharp');
+        const small = (await sharp(FIX('astronaut.jpg')).resize(128).jpeg({ quality: 80 }).toBuffer()).toString('base64');
         const one = async (name: string) => {
-            const blocks = Array.from({ length: Math.ceil(b64.length / 4000) }, (_, i) => b64.slice(i * 4000, (i + 1) * 4000));
+            const blocks = Array.from({ length: Math.ceil(small.length / 1000) }, (_, i) => small.slice(i * 1000, (i + 1) * 1000));
             return data(await anon.callTool({ name: 'upload_image_data', arguments: { total_blocks: blocks.length, filename: name, blocks: blocks.map((d, i) => ({ n: i + 1, data: d, checksum: sum(d) })) } }));
         };
         const old = await one('old.jpg');

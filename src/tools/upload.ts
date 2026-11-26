@@ -22,7 +22,9 @@ import { registerTool, z } from './common.js';
 
 const ID = /^[a-f0-9]{16}$/;
 const MAX_BLOCK_CHARS = 4000;
-const MAX_BLOCKS = 2000;
+const MAX_BLOCKS = 40;
+/** Measured live: models mis-copy roughly 1 block in 4 even at 1,000 characters, so only tiny images are practical. */
+const MAX_TOTAL_CHARS = 20_000;
 
 /** First 8 hex characters of SHA-256 of the block text (whitespace removed). */
 export const blockChecksum = (text: string) => crypto.createHash('sha256').update(text).digest('hex').slice(0, 8);
@@ -55,13 +57,10 @@ export function register(server: McpServer): void {
     registerTool(server, 'upload_image_data', {
         title: 'Upload image data (by the AI)',
         description:
-            'Lets YOU (the AI) put an image on this server yourself, with no action from the user. Use it when you can read the ' +
-            'image file (e.g. a chat attachment in your code sandbox at /mnt/user-data/uploads/...) but cannot reach this server ' +
-            'over the network. The image travels as base64 text in numbered blocks of ~1000 characters, each with a checksum, so ' +
-            'copying mistakes are caught and only the bad blocks are resent. Returns an `image` link that works in every tool. ' +
-            HOW_TO + ' Size: every character costs output tokens, so if the base64 is over ~60,000 characters, first shrink the ' +
-            'image (e.g. longest side 1600 px, JPEG quality 85) and tell the user; for full original quality of a big image, ' +
-            `create_upload_link is better. Uploads are deleted ${config.uploadTtlMinutes} minutes after their last use.`,
+            'For TINY images only (base64 under 20,000 characters, e.g. an icon or small logo) whose file you can read but cannot ' +
+            'send over the network: you send the image yourself as base64 in numbered, checksummed blocks of ~1000 characters. ' +
+            'For photos use upload_image_file (instant) or create_upload_link (one tap for the user): copying long base64 by hand ' +
+            'is slow and error-prone. ' + HOW_TO + ` Uploads are deleted ${config.uploadTtlMinutes} minutes after their last use.`,
         input: z.object({
             blocks: z.array(z.object({
                 n: z.number().int().min(1).max(MAX_BLOCKS).describe('Block number, starting at 1.'),
@@ -79,6 +78,9 @@ export function register(server: McpServer): void {
         let meta: { total: number; filename: string };
         if (!a.upload_id) {
             if (!a.total_blocks) throw new OpError('First call: give total_blocks (how many blocks the whole image has).');
+            if (a.total_blocks * 1000 > MAX_TOTAL_CHARS + 1000)
+                throw new OpError(`That image is too big to copy by hand (${a.total_blocks} blocks; the limit is about ${MAX_TOTAL_CHARS / 1000}). ` +
+                    'Use create_upload_link and send the user the upload page instead: it takes one tap and keeps full quality.');
             id = crypto.randomBytes(8).toString('hex');
             meta = { total: a.total_blocks, filename: a.filename ?? 'image' };
             await fs.mkdir(path.join(dir, id));
@@ -94,8 +96,6 @@ export function register(server: McpServer): void {
         }
         const blockDir = path.join(dir, id);
         const maxChars = Math.ceil((config.maxInputMb * 1024 * 1024 * 4) / 3) + 4;
-        if (meta.total * MAX_BLOCK_CHARS > maxChars * 2 && meta.total > Math.ceil(maxChars / 1000) + 10)
-            throw new OpError(`That is more than ${config.maxInputMb} MB. Shrink the image first (e.g. longest side 1600 px, JPEG quality 85).`);
 
         const rejected: number[] = [];
         for (const b of a.blocks) {
@@ -132,7 +132,7 @@ export function register(server: McpServer): void {
         for (let i = 1; i <= meta.total; i++) b64 += await fs.readFile(path.join(blockDir, String(i)), 'utf8');
         await fs.rm(blockDir, { recursive: true, force: true });
         await fs.rm(path.join(dir, `${id}.json`), { force: true });
-        if (b64.length > maxChars) throw new OpError(`The image is larger than ${config.maxInputMb} MB.`);
+        if (b64.length > Math.max(maxChars, MAX_TOTAL_CHARS * 2)) throw new OpError('That image is too big for this route. Use create_upload_link instead.');
         const buf = Buffer.from(b64, 'base64');
         let decoded;
         try {

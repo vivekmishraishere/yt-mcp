@@ -51,7 +51,7 @@ R = read-only. W = writes a new result file.
 | 28 | `run_image_pipeline` | W | Many edits, one save | "Crop + filter + text + WebP" |
 | 29 | `create_upload_link` (remote) / `save_image_to_folder` (local) | W | Remote: private expiring upload page + curl command. Local: copy a result anywhere | Getting images in / out |
 | 30 | `upload_image_file` (remote) | W | **Instant**: the Claude app sends the attached file itself (Claude's file-transfer extension) | Chat attachments, in about a second |
-| 31 | `upload_image_data` (remote) | W | The AI uploads an image itself as base64 in small checksummed blocks; only damaged blocks are resent | Fallback when file transfer is unavailable |
+| 31 | `upload_image_data` (remote) | W | Tiny images only: the AI sends base64 itself in checksummed blocks; only damaged blocks are resent | Icons/logos when nothing else works |
 
 Also: 4 resources (`image-mcp://presets/social`, `…/filters`, `…/profile-rings`, `image-mcp://config`) and
 3 prompts (`linkedin_profile_photo`, `optimize_for_web`, `blur_faces_for_privacy`).
@@ -67,11 +67,12 @@ MCP tools receive only text from the model, so an attachment cannot simply be pa
    **Claude only enables this for connectors listed in its Connectors Directory whose hosts Anthropic approved** (see
    "Enable instant uploads in Claude" below). Other clients can send the bytes inline in `file.data`.
 1. **Shell with internet** (Claude Code, agents): `create_upload_link` returns a `curl -F "file=@..."` command.
-2. **AI can read the file but has no internet** (claude.ai sandbox): `upload_image_data` — base64 in 1,000-character
-   blocks, each with an 8-character SHA-256 checksum; the server keeps good blocks and names the ones to resend. Models
-   copy long base64 imperfectly (about 3 typos per 10,000 characters in our test), which is why blocks are small. Slow
-   (the model writes every character), so the AI shrinks big images first.
-3. **AI can only see the image**: `create_upload_link` gives the user a private upload page; they paste back the link.
+2. **Upload page** (claude.ai today): `create_upload_link` gives the user a private page; one tap, full quality; they
+   paste back the link.
+3. **Tiny images only** (icons, small logos; base64 under 20,000 characters): `upload_image_data`, where the AI copies
+   base64 itself in 1,000-character checksummed blocks and resends only the rejected ones. Live tests showed models
+   mis-copy long base64 (about 3 typos per 10,000 characters, and roughly 1 block in 4), so photos are refused with a
+   pointer to the upload page.
 
 Public direct image URLs and base64 work as `image` too.
 

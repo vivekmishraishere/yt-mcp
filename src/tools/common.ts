@@ -87,7 +87,7 @@ const USE_FOR: Record<string, string> = {
     run_image_pipeline: 'any request with 2+ edits on one image, e.g. "crop square, make B&W, add text, export WebP".',
     save_image_to_folder: '"save it to my Desktop / Downloads".',
     create_upload_link: 'an image in the chat or on the user\'s device that you cannot read as a file yourself; or to get a curl upload command.',
-    upload_image_data: 'an image file you can read (chat attachment in your code sandbox, a file you created) when you cannot reach this server over the network.',
+    upload_image_data: 'a tiny image file you can read (icon, small logo) when you cannot reach this server over the network.',
 };
 
 // ------------------------------------------------------------------ registration
