@@ -65,9 +65,10 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(status).toBe(403);
     });
 
-    it('lists 30 tools with real descriptions, including both upload tools', async () => {
+    it('lists 31 tools with real descriptions, including the three upload tools', async () => {
         const { tools } = await client.listTools();
-        expect(tools.length).toBe(30);
+        expect(tools.length).toBe(31);
+        expect(tools.map(t => t.name)).toContain('upload_image_file');
         expect(tools.map(t => t.name)).toContain('upload_image_data');
         expect(tools.map(t => t.name)).toContain('create_upload_link');
         expect(tools.map(t => t.name)).not.toContain('save_image_to_folder');
@@ -75,6 +76,7 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         for (const t of tools.filter(t => t.name !== 'list_images')) expect(t.description, t.name).toContain('Use for:');
         expect(tools.find(t => t.name === 'create_upload_link')!.description).toMatch(/upload_image_data/);
         expect(tools.find(t => t.name === 'upload_image_data')!.description).toMatch(/checksum/);
+        expect((tools.find(t => t.name === 'upload_image_file')!.inputSchema as any).properties.file['x-mcp-file'].maxSize).toBeGreaterThan(0);
         expect(client.getInstructions()).toMatch(/STEP 1[\s\S]*create_upload_link[\s\S]*download_url/);
     });
 
@@ -175,39 +177,35 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(webp.warning).toBeUndefined();
     }, 30_000);
 
-    it('upload_image_data: the AI uploads an image itself in checksummed parts', async () => {
+    it('upload_image_data: the AI uploads in checksummed blocks; only bad blocks are resent', async () => {
         const { createHash } = await import('node:crypto');
         const sum = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 8);
-        const b64 = 'data:image/jpeg;base64,' + fs.readFileSync(FIX('astronaut.jpg')).toString('base64');
-        const body = b64.slice(b64.indexOf(',') + 1);
-        const size = Math.ceil(body.length / 3);
-        const parts = [b64.slice(0, b64.indexOf(',') + 1) + body.slice(0, size), body.slice(size, 2 * size), body.slice(2 * size)];
-        const p1 = data(await client.callTool({ name: 'upload_image_data', arguments: { data: parts[0], part: 1, last: false, checksum: sum(body.slice(0, size)), filename: 'IMG 2041.jpg' } }));
-        expect(p1.next_part).toBe(2);
-        // a damaged copy is caught by its checksum and can simply be resent
-        const damaged = parts[1].slice(0, 100) + (parts[1][100] === 'A' ? 'B' : 'A') + parts[1].slice(101);
-        const bad = await client.callTool({ name: 'upload_image_data', arguments: { data: damaged, part: 2, last: false, upload_id: p1.upload_id, checksum: sum(parts[1]) } });
-        expect(bad.isError).toBe(true);
-        expect(text(bad)).toMatch(/Resend part 2/);
-        await client.callTool({ name: 'upload_image_data', arguments: { data: parts[1], part: 2, last: false, upload_id: p1.upload_id, checksum: sum(parts[1]) } });
-        const skip = await client.callTool({ name: 'upload_image_data', arguments: { data: 'AAAA', part: 5, last: true, upload_id: p1.upload_id } });
-        expect(text(skip)).toMatch(/Expected part 3/);
-        const done = await client.callTool({ name: 'upload_image_data', arguments: { data: parts[2], part: 3, last: true, upload_id: p1.upload_id, checksum: sum(parts[2]) } });
+        const orig = fs.readFileSync(FIX('astronaut.jpg'));
+        const b64 = orig.toString('base64');
+        const blocks = Array.from({ length: Math.ceil(b64.length / 1000) }, (_, i) => b64.slice(i * 1000, (i + 1) * 1000));
+        const total = blocks.length;
+        // first call: blocks 1-10, with copy mistakes in 3 and 7 (one changed letter, one doubled digit)
+        const send = blocks.slice(0, 10).map((d, i) => ({ n: i + 1, data: d, checksum: sum(d) }));
+        send[2] = { ...send[2], data: send[2].data.slice(0, 50) + (send[2].data[50] === 'Q' ? 'R' : 'Q') + send[2].data.slice(51) };
+        send[6] = { ...send[6], data: send[6].data.slice(0, 80) + '0' + send[6].data.slice(80) };
+        const r1 = data(await client.callTool({ name: 'upload_image_data', arguments: { blocks: send, total_blocks: total, filename: 'IMG 2041.jpg' } }));
+        expect(r1.rejected).toBe('3, 7');
+        expect(r1.received).toBe(8);
+        expect(r1.next_step).toMatch(/Resend block\(s\) 3, 7/);
+        // resend the two bad blocks plus the rest, in any order
+        const rest = [3, 7, ...Array.from({ length: total - 10 }, (_, i) => i + 11)].map(n => ({ n, data: blocks[n - 1], checksum: sum(blocks[n - 1]) })).reverse();
+        const done = await client.callTool({ name: 'upload_image_data', arguments: { blocks: rest, upload_id: r1.upload_id } });
         const up = data(done);
-        expect([up.width, up.height, up.format]).toEqual([320, 320, 'jpg']);
+        expect([up.width, up.height, up.format, up.blocks]).toEqual([320, 320, 'jpg', total]);
         expect(up.image).toMatch(/IMG_2041_upload\.jpg$/);
-        expect(done.content.some((c: any) => c.type === 'image')).toBe(true);
-        // byte-exact: the stored upload equals the original file
         const stored = Buffer.from(await (await fetch(up.image)).arrayBuffer());
-        expect(stored.equals(fs.readFileSync(FIX('astronaut.jpg')))).toBe(true);
-        const edited = await client.callTool({ name: 'apply_filter', arguments: { image: up.image, filter: 'grayscale' } });
-        expect(edited.isError).toBeFalsy();
-        // one-shot small upload
-        const one = data(await client.callTool({ name: 'upload_image_data', arguments: { data: b64, last: true } }));
-        expect(one.width).toBe(320);
-        // garbage is refused with a clear message
-        const junk = await client.callTool({ name: 'upload_image_data', arguments: { data: 'aGVsbG8gd29ybGQ=', last: true } });
-        expect(text(junk)).toMatch(/not a valid image/);
+        expect(stored.equals(orig)).toBe(true); // byte-exact
+        expect((await client.callTool({ name: 'apply_filter', arguments: { image: up.image, filter: 'grayscale' } })).isError).toBeFalsy();
+        // first call must say how many blocks; unknown ids are refused clearly
+        const noTotal = await client.callTool({ name: 'upload_image_data', arguments: { blocks: [{ n: 1, data: blocks[0], checksum: sum(blocks[0]) }] } });
+        expect(text(noTotal)).toMatch(/total_blocks/);
+        const badId = await client.callTool({ name: 'upload_image_data', arguments: { blocks: [{ n: 1, data: 'AAAA', checksum: sum('AAAA') }], upload_id: 'ffffffffffffffff' } });
+        expect(text(badId)).toMatch(/expired|does not exist/);
     }, 30_000);
 
     it('returns clean errors, never crashes', async () => {
@@ -260,7 +258,7 @@ describe('public server (OPEN_ACCESS=1, no token)', () => {
 
     it('works with no token and says it is public', async () => {
         const { tools } = await anon.listTools();
-        expect(tools.length).toBe(30);
+        expect(tools.length).toBe(31);
         expect((await (await fetch(OPEN)).json()).access).toBe('public');
     });
 
@@ -282,8 +280,14 @@ describe('public server (OPEN_ACCESS=1, no token)', () => {
 
     it('deletes uploads 5 minutes after their last use; using one resets the clock', async () => {
         const b64 = fs.readFileSync(FIX('astronaut.jpg')).toString('base64');
-        const old = data(await anon.callTool({ name: 'upload_image_data', arguments: { data: b64, last: true, filename: 'old.jpg' } }));
-        const used = data(await anon.callTool({ name: 'upload_image_data', arguments: { data: b64, last: true, filename: 'used.jpg' } }));
+        const { createHash } = await import('node:crypto');
+        const sum = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 8);
+        const one = async (name: string) => {
+            const blocks = Array.from({ length: Math.ceil(b64.length / 4000) }, (_, i) => b64.slice(i * 4000, (i + 1) * 4000));
+            return data(await anon.callTool({ name: 'upload_image_data', arguments: { total_blocks: blocks.length, filename: name, blocks: blocks.map((d, i) => ({ n: i + 1, data: d, checksum: sum(d) })) } }));
+        };
+        const old = await one('old.jpg');
+        const used = await one('used.jpg');
         const result = data(await anon.callTool({ name: 'apply_filter', arguments: { image: used.image, filter: 'sepia' } }));
         const file = (u: string) => path.join(DIR, u.split('/files/')[1]);
         const sixMinAgo = new Date(Date.now() - 6 * 60_000), fourMinAgo = new Date(Date.now() - 4 * 60_000);
@@ -297,6 +301,40 @@ describe('public server (OPEN_ACCESS=1, no token)', () => {
         const gone = await anon.callTool({ name: 'get_image_info', arguments: { image: old.image } });
         expect(text(gone)).toMatch(/deleted: uploads are removed 5 minutes after/);
     }, 20_000);
+
+    it('upload_image_file: Claude file-transfer extension (upload target, PUT, second call)', async () => {
+        const { createHash } = await import('node:crypto');
+        const bytes = fs.readFileSync(FIX('astronaut.jpg'));
+        const file = { id: 'file-1', name: 'me.jpg', mimeType: 'image/jpeg', size: bytes.length, digest: { algorithm: 'sha-256', value: createHash('sha256').update(bytes).digest('base64url') } };
+        const meta = (upload = true) => ({ 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientInfo': { name: 't', version: '1' },
+            'io.modelcontextprotocol/clientCapabilities': { extensions: upload ? { 'io.modelcontextprotocol/files': { upload: {} } } : {} } });
+        const rpc = async (id: number, method: string, params: any, upload = true) => {
+            const r = await fetch(`${OPEN}/mcp`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream',
+                'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': method, ...(params.name ? { 'Mcp-Name': params.name } : {}) },
+                body: JSON.stringify({ jsonrpc: '2.0', id, method, params: { ...params, _meta: meta(upload) } }) });
+            const t = await r.text();
+            const line = t.split('\n').find(l => l.startsWith('data:'));
+            return { status: r.status, body: JSON.parse(line ? line.slice(5) : t) };
+        };
+        const disc = await rpc(1, 'server/discover', {});
+        expect(disc.body.result.capabilities.extensions['io.modelcontextprotocol/files']).toEqual({ upload: {} });
+        const first = (await rpc(2, 'tools/call', { name: 'upload_image_file', arguments: { file } })).body.result;
+        expect(first.resultType).toBe('upload_required');
+        expect(first.uploads[0]).toMatchObject({ fileId: 'file-1', method: 'PUT', credentials: 'omit' });
+        expect((await fetch(first.uploads[0].url, { method: 'PUT', headers: first.uploads[0].headers, body: bytes.subarray(0, 10) })).status).toBe(400);
+        expect((await fetch(first.uploads[0].url.replace(/sig=[^&]+/, 'sig=x'), { method: 'PUT', headers: first.uploads[0].headers, body: bytes })).status).toBe(403);
+        expect((await fetch(first.uploads[0].url, { method: 'PUT', headers: first.uploads[0].headers, body: bytes })).status).toBe(200);
+        const changed = await rpc(3, 'tools/call', { name: 'upload_image_file', arguments: { file: { ...file, name: 'x.jpg' } }, requestState: first.requestState });
+        expect(changed.body.error.code).toBe(-32602);
+        const second = (await rpc(4, 'tools/call', { name: 'upload_image_file', arguments: { file }, requestState: first.requestState })).body.result;
+        expect(second.isError).toBeFalsy();
+        const info = JSON.parse(second.content[0].text);
+        expect(Buffer.from(await (await fetch(info.image)).arrayBuffer()).equals(bytes)).toBe(true);
+        expect((await rpc(5, 'tools/call', { name: 'upload_image_file', arguments: { file }, requestState: first.requestState })).body.error.code).toBe(-32602); // replay
+        const noExt = await rpc(6, 'tools/call', { name: 'upload_image_file', arguments: { file } }, false);
+        expect([noExt.status, noExt.body.error.code]).toEqual([400, -32021]);
+        expect(noExt.body.error.message).toMatch(/upload_image_data or create_upload_link/);
+    });
 
     it('keeps storage under MAX_STORAGE_MB by deleting the oldest files', () => {
         const left = fs.readdirSync(DIR).filter(n => n.includes('__old'));

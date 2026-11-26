@@ -12,6 +12,7 @@ import { register as registerInfo } from './tools/info.js';
 import { register as registerLook } from './tools/look.js';
 import { register as registerOverlay } from './tools/overlay.js';
 import { register as registerUpload } from './tools/upload.js';
+import { FILES_EXT, register as registerFileUpload, routeUploadCalls } from './tools/fileupload.js';
 
 const INSTRUCTIONS = config.mode === 'http'
     ? `Image editing tools (crop, resize, convert, compress, filters, blur, text, profile rings) running on a remote server.
@@ -22,9 +23,10 @@ STEP 1: GET THE IMAGE IN. Every tool's \`image\` argument must be one of:
   c) base64 or data:image/...;base64 text that you actually have as text.
 An image attached in chat CANNOT be passed to these tools directly, and neither can file names or paths
 (e.g. "photo.jpg", "/Users/...", "/mnt/user-data/uploads/..."). Get it onto the server with the first option that works:
+  0. If upload_image_file can take the attachment as \`file\`, use it: the app sends the bytes itself, instantly.
   1. Shell with internet access and the file: run the \`direct_upload\` curl command from create_upload_link (fast, lossless).
   2. You can read the file (e.g. the attachment in your code sandbox) but have no internet: upload it YOURSELF with
-     upload_image_data (base64 in parts with checksums). No user action needed.
+     upload_image_data (base64 in small checksummed blocks; resend only the blocks it rejects). No user action needed.
   3. You can only see the image (no file access): call create_upload_link, send the user the upload page, wait for the
      ".../files/..." link they paste back.
 Never type out base64 for an image you can only see. Uploads are deleted ${config.uploadTtlMinutes} minutes after their last use.
@@ -44,13 +46,17 @@ If the user only attached an image in chat, you cannot read the file itself: ask
 const json = (uri: string, data: unknown) => ({ contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(data, null, 2) }] });
 
 export function createServer(): McpServer {
-    const server = new McpServer({ name: 'yt-mcp', title: 'YT Image MCP', version: config.version }, { instructions: INSTRUCTIONS });
+    const server = new McpServer({ name: 'yt-mcp', title: 'YT Image MCP', version: config.version }, {
+        instructions: INSTRUCTIONS,
+        // Claude's file-transfer extension: the app uploads chat attachments to upload_image_file itself
+        capabilities: config.mode === 'http' ? { extensions: { [FILES_EXT]: { upload: {} } } } : undefined,
+    });
     registerInfo(server);
     registerGeometry(server);
     registerFormats(server);
     registerLook(server);
     registerOverlay(server);
-    if (config.mode === 'http') registerUpload(server);
+    if (config.mode === 'http') { registerFileUpload(server); registerUpload(server); }
 
     server.registerResource('social_presets', 'image-mcp://presets/social', { description: 'Every resize_for_social preset with its exact pixel size.', mimeType: 'application/json' },
         async uri => json(uri.href, Object.fromEntries(Object.entries(SOCIAL_PRESETS).map(([k, [w, h, d]]) => [k, { width: w, height: h, use: d }]))));
@@ -102,5 +108,6 @@ export function createServer(): McpServer {
             },
         }],
     }));
+    if (config.mode === 'http') routeUploadCalls(server);
     return server;
 }

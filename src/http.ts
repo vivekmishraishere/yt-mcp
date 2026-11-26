@@ -12,7 +12,8 @@ import { hostHeaderValidation } from '@modelcontextprotocol/express';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import express, { NextFunction, Request, Response } from 'express';
-import { isAuthorized, verifyUploadToken } from './auth.js';
+import { isAuthorized, verifyTarget, verifyUploadToken } from './auth.js';
+import { stagingFile, targetLimits } from './tools/fileupload.js';
 import { config } from './config.js';
 import { FORMATS } from './core/codec.js';
 import { decode } from './core/codec.js';
@@ -185,6 +186,42 @@ export async function startHttp(): Promise<void> {
     }, express.json({ limit: jsonLimit }), (req, res) => {
         const base = requestBase(req);
         requestContext.run({ baseUrl: base }, () => void node(req as any, res as any, req.body));
+    });
+
+    // ---- file-transfer upload targets (Claude's file extension): signed, single-use, size-enforced, write-once
+    app.put('/upload-target/:id', async (req, res) => {
+        const id = String(req.params.id);
+        const exp = Number(req.query.exp);
+        if (!/^[a-f0-9]{32}$/.test(id) || !Number.isFinite(exp) || exp * 1000 < Date.now() || !verifyTarget(`${id}.${exp}`, req.query.sig))
+            return res.status(403).end();
+        const limits = await targetLimits(id);
+        if (!limits) return res.status(404).end();
+        const declared = Number(req.headers['content-length'] ?? -1);
+        if (declared !== limits.size) return res.status(400).end();
+        let handle: fs.FileHandle;
+        try {
+            handle = await fs.open(stagingFile(id), 'wx'); // one write only
+        } catch {
+            return res.status(409).end();
+        }
+        let got = 0;
+        let failed = false;
+        try {
+            for await (const chunk of req as AsyncIterable<Buffer>) {
+                got += chunk.length;
+                if (got > limits.size) { failed = true; break; }
+                await handle.write(chunk);
+            }
+        } catch {
+            failed = true;
+        } finally {
+            await handle.close();
+        }
+        if (failed || got !== limits.size) {
+            await fs.rm(stagingFile(id), { force: true });
+            return res.status(400).end();
+        }
+        res.status(200).end(); // only after the whole file is stored
     });
 
     // ---- results download

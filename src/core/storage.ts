@@ -120,12 +120,14 @@ export async function cleanupExpired(now = Date.now()): Promise<number> {
         total -= x.size;
         removed++;
     }
-    // unfinished chunked uploads: dropped after 15 minutes without a new part
+    // unfinished uploads: AI block uploads after 15 minutes without new blocks; file-transfer targets and
+    // requestStates (prefix t-/s-) after 2 hours (targets live 30 min, states 60 min)
     const pd = pendingDir();
     for (const n of await fs.readdir(pd).catch(() => [] as string[])) {
         const f = path.join(pd, n);
         const st = await fs.stat(f).catch(() => null);
-        if (st && now - st.mtimeMs > 15 * 60_000) { await fs.rm(f, { force: true }); removed++; }
+        const maxAge = /^[ts]-/.test(n) ? 120 * 60_000 : 15 * 60_000;
+        if (st && now - st.mtimeMs > maxAge) { await fs.rm(f, { recursive: true, force: true }); removed++; }
     }
     return removed;
 }

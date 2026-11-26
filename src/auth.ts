@@ -52,3 +52,12 @@ export function verifyUploadToken(token: unknown): boolean {
     const expected = crypto.createHmac('sha256', signingKey).update(`upload:${expStr}`).digest('base64url');
     return safeEqual(sig, expected);
 }
+
+/** HMAC signature for short-lived upload-target URLs (file-transfer extension). */
+export function signTarget(value: string): string {
+    return crypto.createHmac('sha256', signingKey).update(`target:${value}`).digest('base64url');
+}
+
+export function verifyTarget(value: string, sig: unknown): boolean {
+    return typeof sig === 'string' && safeEqual(sig, signTarget(value));
+}
