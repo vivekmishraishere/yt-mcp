@@ -7,7 +7,7 @@ import path from 'node:path';
 import { config } from '../config.js';
 import { Decoded, FormatKey, FORMATS, decode, defaultFormat, encode, EncodeOptions, normalizeFormat } from './codec.js';
 import { Img, OpError, hasAlpha, toSharp } from './img.js';
-import { Stored, safeStem, saveFile, storedPathFromRef } from './storage.js';
+import { Stored, UPLOAD_NAME, safeStem, saveFile, storedPathFromRef, touchUpload } from './storage.js';
 
 export interface Loaded extends Decoded {
     name: string;
@@ -150,7 +150,12 @@ export async function loadImage(source: string): Promise<Loaded> {
     if (stored) {
         try {
             raw = await fs.readFile(stored);
+            await touchUpload(stored);
         } catch {
+            if (UPLOAD_NAME.test(stored))
+                throw new OpError(`That uploaded image has been deleted: uploads are removed ${config.uploadTtlMinutes} minutes after ` +
+                    'their last use, for privacy. Upload it again (upload_image_data, or create_upload_link for the user), or keep ' +
+                    'editing from a result link (`output`), which lasts ' + config.fileTtlHours + ' h.');
             throw new OpError(`That file link has expired (files are kept ${config.fileTtlHours} h) or does not exist. ` +
                 'If it was an upload, ' + UPLOAD_HINT.charAt(0).toLowerCase() + UPLOAD_HINT.slice(1) + ' If it was a result, run that step again on the original.');
         }

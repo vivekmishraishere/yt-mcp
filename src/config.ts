@@ -60,6 +60,10 @@ export const config = {
     uploadsPerMinute: num('UPLOADS_PER_MINUTE', 60),
     maxConcurrentJobs: num('MAX_CONCURRENT_JOBS', 2),
     fileTtlHours: num('FILE_TTL_HOURS', 24),
+    /** Uploaded originals are deleted this many minutes after they were last used (each tool call that reads one resets it). */
+    uploadTtlMinutes: num('UPLOAD_TTL_MINUTES', 5),
+    /** How often expired files are cleaned up, in seconds. */
+    sweepSeconds: num('SWEEP_SECONDS', 60),
     /** Disk cap for uploads + results; the oldest files are deleted first when it is exceeded (protects hosting quotas). */
     maxStorageMb: num('MAX_STORAGE_MB', 1024),
 

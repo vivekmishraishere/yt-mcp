@@ -147,8 +147,8 @@ export function register(server: McpServer): void {
     } else {
         registerTool(server, 'create_upload_link', {
             title: 'Create upload link',
-            description: 'Call this FIRST whenever the user wants to edit an image that is attached in the chat or stored on their ' +
-                'computer or phone (those cannot be passed to tools directly). Returns an upload page link: send it to the user and ' +
+            description: 'Use when the image is attached in the chat or on the user\'s device and you cannot read the file yourself ' +
+                '(if you can read it, upload_image_data needs no user action). Returns an upload page link: send it to the user and ' +
                 "wait. They upload the image there (JPG, PNG, HEIC, WebP...) and paste back a link ending in the file name; pass that " +
                 'link as `image` to any tool. Also returns `direct_upload`, a curl command for agents that can run shell commands.',
             input: z.object({ expires_minutes: z.number().int().min(5).max(1440).default(60).describe('How long the link works (default 60 minutes).') }),

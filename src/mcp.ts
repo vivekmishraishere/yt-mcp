@@ -11,6 +11,7 @@ import { register as registerGeometry } from './tools/geometry.js';
 import { register as registerInfo } from './tools/info.js';
 import { register as registerLook } from './tools/look.js';
 import { register as registerOverlay } from './tools/overlay.js';
+import { register as registerUpload } from './tools/upload.js';
 
 const INSTRUCTIONS = config.mode === 'http'
     ? `Image editing tools (crop, resize, convert, compress, filters, blur, text, profile rings) running on a remote server.
@@ -19,12 +20,14 @@ STEP 1: GET THE IMAGE IN. Every tool's \`image\` argument must be one of:
   a) a link to this server's files (".../files/..."): from the upload page, or the \`output\` of an earlier tool;
   b) a public, direct image URL (the address of the image file itself, not of a web page);
   c) base64 or data:image/...;base64 text that you actually have as text.
-An image the user attached or pasted in chat CANNOT be passed to these tools, and neither can file names or paths
-(e.g. "photo.jpg", "/Users/...", "/mnt/user-data/uploads/..."). Never type out base64 for an image you can only see.
-So when the user's image is in the chat or on their device: call create_upload_link FIRST, send the user the upload page
-link with a one-line instruction, and wait. They upload it and paste back a ".../files/..." link: use that as \`image\`.
-(If you can run shell commands with internet access and have the file, you may instead run the \`direct_upload\` command
-that create_upload_link returns, then use the \`image\` link it prints.)
+An image attached in chat CANNOT be passed to these tools directly, and neither can file names or paths
+(e.g. "photo.jpg", "/Users/...", "/mnt/user-data/uploads/..."). Get it onto the server with the first option that works:
+  1. Shell with internet access and the file: run the \`direct_upload\` curl command from create_upload_link (fast, lossless).
+  2. You can read the file (e.g. the attachment in your code sandbox) but have no internet: upload it YOURSELF with
+     upload_image_data (base64 in parts with checksums). No user action needed.
+  3. You can only see the image (no file access): call create_upload_link, send the user the upload page, wait for the
+     ".../files/..." link they paste back.
+Never type out base64 for an image you can only see. Uploads are deleted ${config.uploadTtlMinutes} minutes after their last use.
 
 STEP 2: EDIT. One edit: call the matching tool. Two or more edits on one image: use run_image_pipeline (one save, no
 quality loss). To continue editing a result, pass its \`output\` link as \`image\`.
@@ -47,6 +50,7 @@ export function createServer(): McpServer {
     registerFormats(server);
     registerLook(server);
     registerOverlay(server);
+    if (config.mode === 'http') registerUpload(server);
 
     server.registerResource('social_presets', 'image-mcp://presets/social', { description: 'Every resize_for_social preset with its exact pixel size.', mimeType: 'application/json' },
         async uri => json(uri.href, Object.fromEntries(Object.entries(SOCIAL_PRESETS).map(([k, [w, h, d]]) => [k, { width: w, height: h, use: d }]))));

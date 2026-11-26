@@ -83,7 +83,7 @@ function allowedHostnames(): string[] | null {
     return [...hosts];
 }
 
-const UPLOAD_PAGE = (maxMb: number) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+const UPLOAD_PAGE = (maxMb: number, UPLOAD_TTL = config.uploadTtlMinutes) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Upload an image</title><style>
 :root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--fg:#14171a;--muted:#5b6470;--accent:#0a66c2;--border:#d8dde3}
 @media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#181c21;--fg:#e8ecf0;--muted:#9aa4ae;--accent:#4b9bf0;--border:#2a3038}}
@@ -96,7 +96,8 @@ label:hover{border-color:var(--accent)}input[type=file]{display:none}
 button{margin-top:10px;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:600;cursor:pointer}
 img{max-width:100%;border-radius:8px;margin-top:12px}.err{color:#d93025}
 </style></head><body><div class="card"><h1>Upload an image</h1>
-<p>JPG, PNG, WebP, HEIC, AVIF, GIF, TIFF or BMP, up to ${maxMb} MB. After uploading, copy the link and paste it back into your Claude chat.</p>
+<p>JPG, PNG, WebP, HEIC, AVIF, GIF, TIFF or BMP, up to ${maxMb} MB. After uploading, copy the link and paste it back into your Claude chat.
+For privacy, the upload is deleted automatically ${UPLOAD_TTL} minutes after it was last used.</p>
 <label id="drop">Choose or drop an image<input id="file" type="file" accept="image/*,.heic,.heif"></label>
 <div id="status"></div><div id="out"><input id="link" readonly><button id="copy">Copy link</button><img id="prev" alt=""></div></div>
 <script>
@@ -120,7 +121,8 @@ export async function startHttp(): Promise<void> {
     }
     if (config.openAccess) {
         console.error(`[yt-mcp] OPEN_ACCESS: public server, no token needed. Limits: ${config.rateLimitPerMinute} MCP requests/min, ` +
-            `${config.maxConcurrentJobs} jobs at a time, ${config.maxStorageMb} MB storage, files kept ${config.fileTtlHours} h.`);
+            `${config.maxConcurrentJobs} jobs at a time, ${config.maxStorageMb} MB storage, uploads deleted ${config.uploadTtlMinutes} min after last use, ` +
+            `results kept ${config.fileTtlHours} h.`);
     }
     try {
         await fs.mkdir(config.storageDir, { recursive: true });
@@ -247,7 +249,7 @@ export async function startHttp(): Promise<void> {
     // ---- periodic cleanup of expired files
     const sweep = async () => { const n = await cleanupExpired().catch(() => 0); if (n) console.error(`[yt-mcp] cleaned up ${n} expired files`); };
     void sweep();
-    setInterval(sweep, 5 * 60_000).unref();
+    setInterval(sweep, Math.max(1, config.sweepSeconds) * 1000).unref(); // every minute by default, so uploads go on time
 
     const listener = app.listen(config.port, config.host, () => {
         console.error(`[yt-mcp] ${config.version} listening on http://${config.host}:${config.port}  (MCP endpoint: /mcp)` +

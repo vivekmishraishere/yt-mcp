@@ -86,7 +86,8 @@ const USE_FOR: Record<string, string> = {
     create_collage: '"combine these photos into a grid", "before/after side by side".',
     run_image_pipeline: 'any request with 2+ edits on one image, e.g. "crop square, make B&W, add text, export WebP".',
     save_image_to_folder: '"save it to my Desktop / Downloads".',
-    create_upload_link: 'every request about an image the user attached in chat or has on their device. Do this before any other tool.',
+    create_upload_link: 'an image in the chat or on the user\'s device that you cannot read as a file yourself; or to get a curl upload command.',
+    upload_image_data: 'an image file you can read (chat attachment in your code sandbox, a file you created) when you cannot reach this server over the network.',
 };
 
 // ------------------------------------------------------------------ registration

@@ -11,6 +11,17 @@ import path from 'node:path';
 import { config } from '../config.js';
 
 export const STORED_NAME = /^[a-f0-9]{24}__[A-Za-z0-9._-]{1,140}$/;
+/** Uploaded originals (from the upload page, curl, or upload_image_data) end in "_upload.<ext>". */
+export const UPLOAD_NAME = /_upload\.[a-z0-9]{2,5}$/;
+/** Folder for half-finished chunked uploads (shared by all server processes). */
+export const pendingDir = () => path.join(config.storageDir, '.pending');
+
+/** Mark a stored upload as just used, so its short lifetime starts again. */
+export async function touchUpload(file: string): Promise<void> {
+    if (!UPLOAD_NAME.test(file)) return;
+    const now = new Date();
+    await fs.utimes(file, now, now).catch(() => {});
+}
 
 /** Base URL of the current HTTP request (used when PUBLIC_BASE_URL is not set). */
 export const requestContext = new AsyncLocalStorage<{ baseUrl: string }>();
@@ -88,6 +99,7 @@ export async function listStored(limit = 50): Promise<{ name: string; ref: strin
  */
 export async function cleanupExpired(now = Date.now()): Promise<number> {
     const ttlMs = config.fileTtlHours * 3600_000;
+    const uploadTtlMs = config.uploadTtlMinutes * 60_000;
     const capBytes = config.maxStorageMb > 0 ? config.maxStorageMb * 1024 * 1024 : Infinity;
     let names: string[] = [];
     try {
@@ -98,15 +110,22 @@ export async function cleanupExpired(now = Date.now()): Promise<number> {
     const files = (await Promise.all(names.map(async n => {
         const f = path.join(config.storageDir, n);
         const st = await fs.stat(f).catch(() => null);
-        return st?.isFile() ? { f, size: st.size, mtime: st.mtimeMs } : null;
-    }))).filter((x): x is { f: string; size: number; mtime: number } => !!x).sort((a, b) => a.mtime - b.mtime);
+        return st?.isFile() ? { f, size: st.size, mtime: st.mtimeMs, ttl: UPLOAD_NAME.test(n) ? uploadTtlMs : ttlMs } : null;
+    }))).filter((x): x is { f: string; size: number; mtime: number; ttl: number } => !!x).sort((a, b) => a.mtime - b.mtime);
     let total = files.reduce((t, x) => t + x.size, 0);
     let removed = 0;
     for (const x of files) {
-        if (now - x.mtime <= ttlMs && total <= capBytes) continue;
+        if (now - x.mtime <= x.ttl && total <= capBytes) continue;
         await fs.rm(x.f, { force: true });
         total -= x.size;
         removed++;
+    }
+    // unfinished chunked uploads: dropped after 15 minutes without a new part
+    const pd = pendingDir();
+    for (const n of await fs.readdir(pd).catch(() => [] as string[])) {
+        const f = path.join(pd, n);
+        const st = await fs.stat(f).catch(() => null);
+        if (st && now - st.mtimeMs > 15 * 60_000) { await fs.rm(f, { force: true }); removed++; }
     }
     return removed;
 }

@@ -65,14 +65,16 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(status).toBe(403);
     });
 
-    it('lists 29 tools with real descriptions, including create_upload_link', async () => {
+    it('lists 30 tools with real descriptions, including both upload tools', async () => {
         const { tools } = await client.listTools();
-        expect(tools.length).toBe(29);
+        expect(tools.length).toBe(30);
+        expect(tools.map(t => t.name)).toContain('upload_image_data');
         expect(tools.map(t => t.name)).toContain('create_upload_link');
         expect(tools.map(t => t.name)).not.toContain('save_image_to_folder');
         for (const t of tools) expect((t.description ?? '').length).toBeGreaterThan(40);
         for (const t of tools.filter(t => t.name !== 'list_images')) expect(t.description, t.name).toContain('Use for:');
-        expect(tools.find(t => t.name === 'create_upload_link')!.description).toMatch(/FIRST/);
+        expect(tools.find(t => t.name === 'create_upload_link')!.description).toMatch(/upload_image_data/);
+        expect(tools.find(t => t.name === 'upload_image_data')!.description).toMatch(/checksum/);
         expect(client.getInstructions()).toMatch(/STEP 1[\s\S]*create_upload_link[\s\S]*download_url/);
     });
 
@@ -173,6 +175,41 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(webp.warning).toBeUndefined();
     }, 30_000);
 
+    it('upload_image_data: the AI uploads an image itself in checksummed parts', async () => {
+        const { createHash } = await import('node:crypto');
+        const sum = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 8);
+        const b64 = 'data:image/jpeg;base64,' + fs.readFileSync(FIX('astronaut.jpg')).toString('base64');
+        const body = b64.slice(b64.indexOf(',') + 1);
+        const size = Math.ceil(body.length / 3);
+        const parts = [b64.slice(0, b64.indexOf(',') + 1) + body.slice(0, size), body.slice(size, 2 * size), body.slice(2 * size)];
+        const p1 = data(await client.callTool({ name: 'upload_image_data', arguments: { data: parts[0], part: 1, last: false, checksum: sum(body.slice(0, size)), filename: 'IMG 2041.jpg' } }));
+        expect(p1.next_part).toBe(2);
+        // a damaged copy is caught by its checksum and can simply be resent
+        const damaged = parts[1].slice(0, 100) + (parts[1][100] === 'A' ? 'B' : 'A') + parts[1].slice(101);
+        const bad = await client.callTool({ name: 'upload_image_data', arguments: { data: damaged, part: 2, last: false, upload_id: p1.upload_id, checksum: sum(parts[1]) } });
+        expect(bad.isError).toBe(true);
+        expect(text(bad)).toMatch(/Resend part 2/);
+        await client.callTool({ name: 'upload_image_data', arguments: { data: parts[1], part: 2, last: false, upload_id: p1.upload_id, checksum: sum(parts[1]) } });
+        const skip = await client.callTool({ name: 'upload_image_data', arguments: { data: 'AAAA', part: 5, last: true, upload_id: p1.upload_id } });
+        expect(text(skip)).toMatch(/Expected part 3/);
+        const done = await client.callTool({ name: 'upload_image_data', arguments: { data: parts[2], part: 3, last: true, upload_id: p1.upload_id, checksum: sum(parts[2]) } });
+        const up = data(done);
+        expect([up.width, up.height, up.format]).toEqual([320, 320, 'jpg']);
+        expect(up.image).toMatch(/IMG_2041_upload\.jpg$/);
+        expect(done.content.some((c: any) => c.type === 'image')).toBe(true);
+        // byte-exact: the stored upload equals the original file
+        const stored = Buffer.from(await (await fetch(up.image)).arrayBuffer());
+        expect(stored.equals(fs.readFileSync(FIX('astronaut.jpg')))).toBe(true);
+        const edited = await client.callTool({ name: 'apply_filter', arguments: { image: up.image, filter: 'grayscale' } });
+        expect(edited.isError).toBeFalsy();
+        // one-shot small upload
+        const one = data(await client.callTool({ name: 'upload_image_data', arguments: { data: b64, last: true } }));
+        expect(one.width).toBe(320);
+        // garbage is refused with a clear message
+        const junk = await client.callTool({ name: 'upload_image_data', arguments: { data: 'aGVsbG8gd29ybGQ=', last: true } });
+        expect(text(junk)).toMatch(/not a valid image/);
+    }, 30_000);
+
     it('returns clean errors, never crashes', async () => {
         const cases: [string, Record<string, unknown>, RegExp][] = [
             ['get_image_info', { image: '/etc/passwd' }, /file name or path.*create_upload_link/],
@@ -206,7 +243,7 @@ describe('public server (OPEN_ACCESS=1, no token)', () => {
             const t = new Date(Date.now() - (10 - i) * 60_000);
             fs.utimesSync(f, t, t);
         }
-        const env = { ...process.env, PORT: String(OPEN_PORT), OPEN_ACCESS: '1', PUBLIC_BASE_URL: OPEN, STORAGE_DIR: DIR, HOST: '127.0.0.1', MAX_STORAGE_MB: '2' };
+        const env = { ...process.env, PORT: String(OPEN_PORT), OPEN_ACCESS: '1', PUBLIC_BASE_URL: OPEN, STORAGE_DIR: DIR, HOST: '127.0.0.1', MAX_STORAGE_MB: '2', SWEEP_SECONDS: '1' };
         delete env.MCP_AUTH_TOKEN;
         open = spawn(process.execPath, [ENTRY], { env, stdio: ['ignore', 'ignore', 'pipe'] });
         for (let i = 0; i < 100; i++) {
@@ -223,7 +260,7 @@ describe('public server (OPEN_ACCESS=1, no token)', () => {
 
     it('works with no token and says it is public', async () => {
         const { tools } = await anon.listTools();
-        expect(tools.length).toBe(29);
+        expect(tools.length).toBe(30);
         expect((await (await fetch(OPEN)).json()).access).toBe('public');
     });
 
@@ -242,6 +279,24 @@ describe('public server (OPEN_ACCESS=1, no token)', () => {
         // a raw upload without a signed link is still refused (no anonymous file hosting)
         expect((await fetch(`${OPEN}/upload`, { method: 'POST', body: fs.readFileSync(FIX('astronaut.jpg')) })).status).toBe(403);
     });
+
+    it('deletes uploads 5 minutes after their last use; using one resets the clock', async () => {
+        const b64 = fs.readFileSync(FIX('astronaut.jpg')).toString('base64');
+        const old = data(await anon.callTool({ name: 'upload_image_data', arguments: { data: b64, last: true, filename: 'old.jpg' } }));
+        const used = data(await anon.callTool({ name: 'upload_image_data', arguments: { data: b64, last: true, filename: 'used.jpg' } }));
+        const result = data(await anon.callTool({ name: 'apply_filter', arguments: { image: used.image, filter: 'sepia' } }));
+        const file = (u: string) => path.join(DIR, u.split('/files/')[1]);
+        const sixMinAgo = new Date(Date.now() - 6 * 60_000), fourMinAgo = new Date(Date.now() - 4 * 60_000);
+        fs.utimesSync(file(old.image), sixMinAgo, sixMinAgo);
+        fs.utimesSync(file(used.image), fourMinAgo, fourMinAgo);
+        expect((await anon.callTool({ name: 'get_image_info', arguments: { image: used.image, preview: false } })).isError).toBeFalsy(); // use resets clock
+        await new Promise(r => setTimeout(r, 2500)); // > one sweep
+        expect(fs.existsSync(file(old.image))).toBe(false);
+        expect(fs.existsSync(file(used.image))).toBe(true);
+        expect(fs.existsSync(file(result.output))).toBe(true); // results keep their own, longer lifetime
+        const gone = await anon.callTool({ name: 'get_image_info', arguments: { image: old.image } });
+        expect(text(gone)).toMatch(/deleted: uploads are removed 5 minutes after/);
+    }, 20_000);
 
     it('keeps storage under MAX_STORAGE_MB by deleting the oldest files', () => {
         const left = fs.readdirSync(DIR).filter(n => n.includes('__old'));
