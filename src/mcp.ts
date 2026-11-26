@@ -13,6 +13,7 @@ import { register as registerLook } from './tools/look.js';
 import { register as registerOverlay } from './tools/overlay.js';
 import { register as registerUpload } from './tools/upload.js';
 import { FILES_EXT, register as registerFileUpload, routeUploadCalls } from './tools/fileupload.js';
+import { registerUploaderUi } from './tools/uploader-ui.js';
 
 const INSTRUCTIONS = config.mode === 'http'
     ? `Image editing tools (crop, resize, convert, compress, filters, blur, text, profile rings) running on a remote server.
@@ -25,8 +26,9 @@ An image attached in chat CANNOT be passed to these tools directly, and neither 
 (e.g. "photo.jpg", "/Users/...", "/mnt/user-data/uploads/..."). Get it onto the server with the first option that works:
   0. If upload_image_file can take the attachment as \`file\`, use it: the app sends the bytes itself, instantly.
   1. Shell with internet access and the file: run the \`direct_upload\` curl command from create_upload_link (fast, lossless).
-  2. Otherwise call create_upload_link, send the user the upload page (one tap, full quality), and wait for the
-     ".../files/..." link they paste back. This is the normal route in claude.ai today.
+  2. Otherwise call create_upload_link. In Claude it shows an upload box right in the chat: ask the user to drop the image
+     there. When it is uploaded you receive the message "I uploaded my image: <link>"; continue with that link. (If no box
+     appears, the user can use the upload page link and paste back the ".../files/..." link.) Full quality, about a second.
   3. Only for a tiny image (base64 under 20,000 characters) whose file you can read: upload_image_data. Copying base64
      by hand is slow and error-prone; do not use it for photos.
 Never type out base64 for an image you can only see. Uploads are deleted ${config.uploadTtlMinutes} minutes after their last use.
@@ -56,7 +58,7 @@ export function createServer(): McpServer {
     registerFormats(server);
     registerLook(server);
     registerOverlay(server);
-    if (config.mode === 'http') { registerFileUpload(server); registerUpload(server); }
+    if (config.mode === 'http') { registerFileUpload(server); registerUpload(server); registerUploaderUi(server); }
 
     server.registerResource('social_presets', 'image-mcp://presets/social', { description: 'Every resize_for_social preset with its exact pixel size.', mimeType: 'application/json' },
         async uri => json(uri.href, Object.fromEntries(Object.entries(SOCIAL_PRESETS).map(([k, [w, h, d]]) => [k, { width: w, height: h, use: d }]))));

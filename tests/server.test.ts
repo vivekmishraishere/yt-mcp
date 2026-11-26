@@ -74,7 +74,7 @@ describe('remote (Streamable HTTP at /mcp)', () => {
         expect(tools.map(t => t.name)).not.toContain('save_image_to_folder');
         for (const t of tools) expect((t.description ?? '').length).toBeGreaterThan(40);
         for (const t of tools.filter(t => t.name !== 'list_images')) expect(t.description, t.name).toContain('Use for:');
-        expect(tools.find(t => t.name === 'create_upload_link')!.description).toMatch(/upload_image_data/);
+        expect(tools.find(t => t.name === 'create_upload_link')!.description).toMatch(/UPLOAD BOX RIGHT IN THE CHAT/);
         expect(tools.find(t => t.name === 'upload_image_data')!.description).toMatch(/checksum/);
         expect((tools.find(t => t.name === 'upload_image_file')!.inputSchema as any).properties.file['x-mcp-file'].maxSize).toBeGreaterThan(0);
         expect(client.getInstructions()).toMatch(/STEP 1[\s\S]*create_upload_link[\s\S]*download_url/);
@@ -308,6 +308,28 @@ describe('public server (OPEN_ACCESS=1, no token)', () => {
         const gone = await anon.callTool({ name: 'get_image_info', arguments: { image: old.image } });
         expect(text(gone)).toMatch(/deleted: uploads are removed 5 minutes after/);
     }, 20_000);
+
+    it('create_upload_link shows an in-chat upload box (MCP App) that can reach this server', async () => {
+        const { tools } = await anon.listTools();
+        const t = tools.find(x => x.name === 'create_upload_link')!;
+        expect((t as any)._meta.ui.resourceUri).toBe('ui://yt-mcp/uploader.html');
+        const res = await anon.readResource({ uri: 'ui://yt-mcp/uploader.html' });
+        const item: any = res.contents[0];
+        expect(item.mimeType).toBe('text/html;profile=mcp-app');
+        expect(item._meta.ui.csp.connectDomains).toEqual([new URL(OPEN).origin]);
+        expect(item.text).toContain('sendMessage');
+        const call: any = await anon.callTool({ name: 'create_upload_link', arguments: {} });
+        expect(call.structuredContent.upload_url).toMatch(/\/upload\?t=/);
+        // the box's script and its cross-origin upload must be allowed
+        const js = await fetch(`${OPEN}/static/mcp-app-client.js`);
+        expect([js.status, js.headers.get('access-control-allow-origin')]).toEqual([200, '*']);
+        expect(js.headers.get('content-type')).toMatch(/javascript/);
+        const pre = await fetch(call.structuredContent.upload_url, { method: 'OPTIONS', headers: { Origin: 'https://sandbox.example', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' } });
+        expect([pre.status, pre.headers.get('access-control-allow-origin')]).toEqual([204, '*']);
+        const up = await fetch(call.structuredContent.upload_url + '&name=a.jpg', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Origin: 'https://sandbox.example' }, body: fs.readFileSync(FIX('astronaut.jpg')) });
+        expect(up.headers.get('access-control-allow-origin')).toBe('*');
+        expect((await up.json()).image).toMatch(/\/files\//);
+    });
 
     it('upload_image_file: Claude file-transfer extension (upload target, PUT, second call)', async () => {
         const { createHash } = await import('node:crypto');

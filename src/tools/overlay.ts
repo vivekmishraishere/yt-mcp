@@ -12,6 +12,7 @@ import { addText, addWatermark, removeSolidBackground } from '../core/ops/overla
 import { PIPELINE_OPS, runPipeline } from '../core/ops/pipeline.js';
 import { baseUrl, safeStem } from '../core/storage.js';
 import { color, imageSource, outputFormat, position, registerTool, z } from './common.js';
+import { UPLOADER_URI } from './uploader-ui.js';
 
 export function register(server: McpServer): void {
     registerTool(server, 'add_text_to_image', {
@@ -147,24 +148,31 @@ export function register(server: McpServer): void {
     } else {
         registerTool(server, 'create_upload_link', {
             title: 'Create upload link',
-            description: 'Use when the image is attached in the chat or on the user\'s device and you cannot read the file yourself ' +
-                '(if you can read it, upload_image_data needs no user action). Returns an upload page link: send it to the user and ' +
-                "wait. They upload the image there (JPG, PNG, HEIC, WebP...) and paste back a link ending in the file name; pass that " +
-                'link as `image` to any tool. Also returns `direct_upload`, a curl command for agents that can run shell commands.',
+            description: 'Use when the image is attached in the chat or on the user\'s device and you cannot read the file yourself. ' +
+                'In apps that support MCP Apps (Claude, ChatGPT), this shows an UPLOAD BOX RIGHT IN THE CHAT: the user drops the ' +
+                'image in, it uploads in about a second, and you then receive a message "I uploaded my image: <link>" — continue ' +
+                'with that link as `image`. Tell the user to drop the image into the box; also give the upload page link in case ' +
+                'the box does not appear. Returns `direct_upload` too, a curl command for agents that can run shell commands.',
+            _meta: { ui: { resourceUri: UPLOADER_URI }, 'ui/resourceUri': UPLOADER_URI },
             input: z.object({ expires_minutes: z.number().int().min(5).max(1440).default(60).describe('How long the link works (default 60 minutes).') }),
         }, async a => {
             const { token, expiresAt } = makeUploadToken(a.expires_minutes);
             const page = `${baseUrl()}/upload?t=${token}`;
-            return reply({
+            const out = {
                 upload_page: page,
+                upload_url: `${baseUrl()}/upload?t=${token}`,
                 expires_at: expiresAt.toISOString(),
-                message_for_user: `Please upload your image here: ${page}\nAfter it uploads, tap "Copy link" and paste the link back into this chat.`,
+                message_for_user: `Drop your image into the upload box above. If no box appears, upload it here: ${page} ` +
+                    'and paste the link it shows back into this chat.',
                 direct_upload: `curl -sS -F "file=@/path/to/image.jpg" "${baseUrl()}/upload?t=${token}"`,
                 direct_upload_note: `Only for agents with a shell whose network can reach ${new URL(baseUrl()).hostname} (claude.ai's code sandbox ` +
                     'usually cannot unless the user allows that domain for code execution). It prints JSON whose `image` field is the link to use. ' +
                     'Do not upload the user\'s image to third-party hosts (gists, image hosts) without asking them.',
-                next_step: 'Send message_for_user to the user and wait for the pasted link (it contains /files/). Then call the edit tool with image=<that link>.',
-            });
+                next_step: 'Send message_for_user to the user and wait. When the image arrives you get a message with a link containing ' +
+                    '/files/ (from the upload box, or pasted by the user). Then call the edit tool with image=<that link>.',
+            };
+            const r = await reply(out);
+            return { ...r, structuredContent: out };
         });
     }
 }

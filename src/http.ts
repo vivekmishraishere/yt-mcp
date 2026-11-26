@@ -14,6 +14,8 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import express, { NextFunction, Request, Response } from 'express';
 import { isAuthorized, verifyTarget, verifyUploadToken } from './auth.js';
 import { stagingFile, targetLimits } from './tools/fileupload.js';
+import { APP_CLIENT_PATH } from './tools/uploader-ui.js';
+import { createRequire } from 'node:module';
 import { config } from './config.js';
 import { FORMATS } from './core/codec.js';
 import { decode } from './core/codec.js';
@@ -242,7 +244,24 @@ export async function startHttp(): Promise<void> {
         }
     });
 
+    // ---- MCP App client script for the in-chat upload box (module script: needs CORS)
+    const appClient = createRequire(import.meta.url).resolve('@modelcontextprotocol/ext-apps/app-with-deps');
+    app.get(APP_CLIENT_PATH, (_req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.type('text/javascript').sendFile(appClient);
+    });
+
     // ---- uploads (signed link from create_upload_link, or the bearer token)
+    // CORS: the in-chat upload box runs in the host's sandboxed frame (another origin). The signed link is the
+    // credential, so any origin may send to it; no cookies are involved.
+    const cors = (res: Response) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        res.setHeader('Access-Control-Max-Age', '600');
+    };
+    app.options('/upload', (_req, res) => { cors(res); res.status(204).end(); });
     const uploadAllowed = (req: Request) => verifyUploadToken(req.query.t) || (config.authToken !== '' && isAuthorized(req.headers, {}));
     app.get('/upload', (req, res) => {
         if (!verifyUploadToken(req.query.t)) return res.status(403).type('text/plain').send('This upload link is invalid or has expired. Ask Claude for a new one (create_upload_link).');
@@ -251,6 +270,7 @@ export async function startHttp(): Promise<void> {
     });
     const uploads = makeLimiter(config.uploadsPerMinute);
     app.post('/upload', (req, res, next) => {
+        cors(res);
         if (!uploadAllowed(req)) return res.status(403).json({ error: 'Upload link invalid or expired.' });
         const over = uploads.hit('all');
         if (over) return tooMany(res, over);

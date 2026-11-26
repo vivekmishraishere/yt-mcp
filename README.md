@@ -67,8 +67,10 @@ MCP tools receive only text from the model, so an attachment cannot simply be pa
    **Claude only enables this for connectors listed in its Connectors Directory whose hosts Anthropic approved** (see
    "Enable instant uploads in Claude" below). Other clients can send the bytes inline in `file.data`.
 1. **Shell with internet** (Claude Code, agents): `create_upload_link` returns a `curl -F "file=@..."` command.
-2. **Upload page** (claude.ai today): `create_upload_link` gives the user a private page; one tap, full quality; they
-   paste back the link.
+2. **Upload box in the chat** (claude.ai and Claude Desktop today, no approval needed): `create_upload_link` is an
+   MCP App. Claude shows an upload box inside the conversation; the user drops the image in, it uploads straight to this
+   server (about a second, full quality), and the box sends Claude the message "I uploaded my image: <link>", so the AI
+   continues on its own. In apps without MCP Apps the same tool returns a private upload page link instead.
 3. **Tiny images only** (icons, small logos; base64 under 20,000 characters): `upload_image_data`, where the AI copies
    base64 itself in 1,000-character checksummed blocks and resends only the rejected ones. Live tests showed models
    mis-copy long base64 (about 3 typos per 10,000 characters, and roughly 1 block in 4), so photos are refused with a

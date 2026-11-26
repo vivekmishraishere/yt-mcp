@@ -135,6 +135,8 @@ export interface ToolDef<S extends z.ZodObject> {
     description: string;
     input: S;
     readOnly?: boolean;
+    /** Extra tool metadata, e.g. { ui: { resourceUri } } to show an MCP App widget with the result. */
+    _meta?: Record<string, unknown>;
 }
 
 /** What kind of image input a call used, for logs (never the data itself). */
@@ -168,6 +170,7 @@ export function registerTool<S extends z.ZodObject>(server: McpServer, name: str
             idempotentHint: !!def.readOnly,
             openWorldHint: true, // may fetch image URLs
         },
+        ...(def._meta ? { _meta: def._meta } : {}),
     }, (async (args: z.infer<S>) => {
         const t = Date.now();
         let result: ToolReply;
